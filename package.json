@@ -1,0 +1,39 @@
+{
+  "name": "dietary-rag",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "ingest": "tsx scripts/ingest.ts",
+    "parse": "tsx scripts/dumpParsed.ts",
+    "chunk": "tsx scripts/dumpChunks.ts",
+    "embeddings": "tsx scripts/showEmbeddings.ts",
+    "eval": "tsx scripts/eval.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "cheerio": "^1.2.0",
+    "next": "^16.4.0",
+    "openai": "^7.30.0",
+    "pdfjs-dist": "^6.4.299",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true,
+    "esbuild@0.28.2": true
+  }
+}

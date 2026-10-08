@@ -1,0 +1,18 @@
+# dependencies and build
+/node_modules
+/.next/
+/out/
+*.tsbuildinfo
+
+# secrets
+.env
+.env.local
+.env.*.local
+
+# guidance index, conversation store, fetched bodies, eval output
+data/guidance.db
+data/nutrition.db
+data/raw/
+evals/runs/
+
+.DS_Store
