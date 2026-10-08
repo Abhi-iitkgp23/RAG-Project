@@ -80,7 +80,7 @@ Constants under test: target 1,200 characters, hard max 2,000, overlap 200, mini
 | 3.6 | A short line appears on a single page | Kept. Repetition on most pages is the condition for dropping it | Fixture |
 | 3.7 | HTML contains `script`, `style`, and navigation chrome | That text is absent from every chunk. The article body is walked in order | Fixture |
 | 3.8 | An `h4` appears under an `h2` | It does not start a new section. `h1`–`h3` are the headings that do | Fixture |
-| 3.9 | A list sits under a heading and the section is within the hard max | The list and the heading’s prose stay in one chunk | Fixture |
+| 3.9 | A list sits under a heading and the section is within the hard max | The list and the heading’s prose stay in one chunk. `unitKind` is `section`. A parser `list` is stored as `section` | Fixture |
 | 3.10 | Paragraphs continue until a heading of equal or higher rank | A lower heading nests. An equal or higher heading closes the section | Fixture |
 | 3.11 | Cold Food Storage Chart category | The row that names the food, plus the rows under it until the next category, is one chunk. The refrigerator time and the food name are in that same text. This holds when the category itself is longer than 2,000 characters | Fixture, plus a spot-read of cooked poultry |
 | 3.12 | Fats and oils in `dgi-2024` and in `eatwell-2018` | Each document has a readable chunk for that topic. The two documents are not merged into one chunk | Spot-read |
@@ -92,20 +92,21 @@ Constants under test: target 1,200 characters, hard max 2,000, overlap 200, mini
 | ID | Corner | Expected | Check |
 | --- | --- | --- | --- |
 | 3.15 | Headed section, recommendation, list, or fitting table of 1,200 to 2,000 characters | Kept whole. Overlap is not applied. The target size is not a second cut | Fixture |
-| 3.16 | Narrative section of 2,001 characters or more, with paragraph breaks | Split on paragraph boundaries. Neighbours share a 200-character overlap, so a sentence on the cut appears in both. `unitKind` is `paragraph-split` | Fixture |
-| 3.17 | Narrative section over the hard max with a single paragraph and no inner heading | Still one unit if there is no paragraph boundary to cut on, rather than a cut through the middle of a sentence | Fixture |
+| 3.16 | Narrative section of 2,001 characters or more, with paragraph breaks | Split on blank-line paragraph boundaries (`\n\n`) toward the 1,200-character target. Neighbours share a 200-character overlap, so a sentence on the cut appears in both. `unitKind` is `paragraph-split` | Fixture |
+| 3.16a | The same oversized narrative also contains ` \| ` | The cut stays on `\n\n`. A ` \| ` join is a table cell or a leftover column join, not a paragraph boundary | Fixture |
+| 3.17 | Narrative section over the hard max with a single paragraph and no inner heading | Still one unit if there is no paragraph boundary to cut on, rather than a cut through the middle of a sentence. A paragraph that is still over 2,000 characters stays whole | Fixture |
 | 3.18 | Table that fits, including a one-row table | Kept whole, header row included | Fixture |
-| 3.19 | Table over the hard max with no category groups | Split between rows. Each piece starts with the same header row. No row is divided, including a single row that itself exceeds 2,000 characters | Fixture |
+| 3.19 | Table over the hard max with no category groups | Split between rows. Each piece starts with the same header row. `unitKind` stays `table`. No row is divided, including a single row that itself exceeds 2,000 characters. The ingest log counts these as row-splits | Fixture |
 | 3.20 | Overlap on a table split or a category split | Absent. Header repetition is the table mechanism. Category groups are not overlapped | Fixture |
-| 3.21 | Chunk of 79 characters of prose, with a following chunk in the same document | Merged into that following chunk. It has no id of its own | Fixture |
+| 3.21 | Chunk of 79 characters of prose, with a following chunk in the same document | Prefixed onto that following chunk. The stub has no id of its own. The receiving chunk keeps its own `sectionHeading` and `unitKind` | Fixture |
 | 3.22 | Chunk of exactly 80 characters of prose | Kept. The merge rule is strictly under 80 | Fixture |
-| 3.23 | A bare heading, or a page number that survived cleanup | Not indexed alone | Fixture |
-| 3.24 | A chunk under 80 characters with no following chunk in that document | It is not merged backward into the previous chunk, and it is not merged into another document. A heading with no body is not indexed on its own. The only merge the architecture defines is into the following chunk | Fixture |
-| 3.25 | Two short chunks in a row | Each merges forward until the next chunk is at least 80 characters, still inside the same document | Fixture |
-| 3.26 | A 79-character stub at the end of `dgi-2024` followed by the first chunk of `eatwell-2018` | The stub stays inside `dgi-2024`. Documents do not absorb each other’s leftovers | Fixture |
+| 3.23 | A bare heading, or a page number that survived cleanup | Not indexed alone. It is prefixed forward, or appended backward when it is the last unit of the document | Fixture |
+| 3.24 | A stub under 80 characters that is the last unit of a document, such as the Cold Food Storage review date | Appended to the previous chunk of that document. It is not merged into another document. A heading with no body is not indexed on its own | Fixture |
+| 3.25 | Two short chunks in a row, with a longer chunk after them in the same document | Each is prefixed onto the next chunk until that chunk is at least 80 characters. The receiving chunk keeps its own `sectionHeading` and `unitKind` | Fixture |
+| 3.26 | A 79-character stub at the end of `dgi-2024` followed by the first chunk of `eatwell-2018` | Appended to the previous `dgi-2024` chunk. It is not prefixed onto `eatwell-2018` | Fixture |
 | 3.27 | Every emitted chunk | `text` is non-empty, `sectionHeading` is non-empty, `unitKind` is one of `section`, `recommendation`, `table`, `category`, `paragraph-split`, and `id` is `{documentId}:{ordinal}` | Unit over the fixture set |
 | 3.28 | The same parsed units chunked twice | The same ids and the same texts | Unit |
-| 3.29 | Citation fields | `documentName`, `publisher`, `year`, and `sourceUrl` are copied onto the chunk from the manifest | Unit |
+| 3.29 | Citation fields | `documentName`, `publisher`, `year`, and `sourceUrl` are copied from the manifest. `retrievedAt` is copied from that document’s `fetch.json` | Unit |
 
 ---
 
@@ -113,14 +114,19 @@ Constants under test: target 1,200 characters, hard max 2,000, overlap 200, mini
 
 `MIN_SCORE` is `0.30`. A score equal to `0.30` is evidence. A score below `0.30` is discarded. `k` is 6 unless the caller passes another value.
 
+The string embedded for a chunk is the section heading, a blank line, then the chunk text. A query is embedded as the rewritten question alone, with no heading prefix. The stored `text` column is unchanged, so a quote matches that column. Ingest uses `text-embedding-3-small` at the default 1,536 dimensions and does not set `dimensions`. A batch holds at most 2,048 inputs and 300,000 tokens. The request path embeds one query at a time.
+
 | ID | Corner | Expected | Check |
 | --- | --- | --- | --- |
 | 4.1 | A vector compared with itself | Cosine is 1 within floating-point tolerance | Unit |
 | 4.2 | A known orthogonal pair | Cosine is 0 | Unit |
 | 4.3 | A zero vector | The score is not `NaN` and does not clear `MIN_SCORE` | Unit |
 | 4.4 | Embedding length is not 1,536 | Ingest rejects that batch and does not swap `guidance.db` | Unit |
-| 4.5 | Query embedding | One string per request. Ingest still batches | Unit with a counting client |
-| 4.6 | Second ingest, same `contentHash` and same chunk texts | The embedding client is not called. Stored vectors are reused | Ingest |
+| 4.5 | Query embedding | One string per request: the rewritten question alone, with no heading prefix. Ingest still batches chunk inputs | Unit with a counting client |
+| 4.5a | A chunk is embedded | The request string is the section heading, a blank line, then `text`. The `text` column stays the passage alone. The request does not set `dimensions` | Unit |
+| 4.5b | An ingest batch would exceed 2,048 inputs or 300,000 tokens | The call is split under both caps. A query embed still sends one string | Unit with a counting client |
+| 4.6 | Second ingest, same `contentHash` and same embedding input (heading plus text) | The embedding client is not called. Stored vectors are reused | Ingest |
+| 4.6a | Same `contentHash`, section heading changed, chunk text unchanged | Those chunks are embedded again. The skip checks heading plus text | Unit |
 | 4.7 | Same `contentHash`, chunk text changed because the splitter changed | Those chunks are embedded again | Unit |
 | 4.8 | `contentHash` changed | Affected chunks are embedded again | Unit |
 | 4.9 | The embedding call throws after some batches | The previous `guidance.db` is still the file on disk and still opens. The temp file is not renamed over it | Unit |
@@ -133,6 +139,7 @@ Constants under test: target 1,200 characters, hard max 2,000, overlap 200, mini
 | 4.16 | `guidance.db` is missing, empty, or not a SQLite file | A typed error. The route maps it to `500` | Unit |
 | 4.17 | The chunks table exists and has zero rows | `retrieve` returns an empty list. It does not throw | Unit |
 | 4.18 | Cooked-chicken refrigerator query on the real index | A hit from `cold-storage-2023` or `fsa-chill-2017` at or above `MIN_SCORE` | Script |
+| 4.18a | Ingest on the current extract | Printed chunk counts are `dgi-2024` 637, `eatwell-2018` 51, `cold-storage-2023` 14, `fsa-chill-2017` 5 (707). A later re-parse that changes those counts updates `docs/ingest-record.md` in the same run | Ingest log |
 | 4.19 | Unknown `documentId` | Empty list | Unit |
 
 ### Alias filter
@@ -245,6 +252,7 @@ Drive `ground.ts` with fixtures. No network.
 | 7.18 | The model quote contains a URL, or the claim text contains a URL | The panel link remains `source.url` from the chunk. The assembler does not add a link | Unit |
 | 7.19 | Filtered scope `eatwell-2018` and zero surviving claims | The coverage sentence is “The guidance I searched does not cover that. I looked in: The Eatwell Guide booklet (Public Health England, 2018).” | Unit |
 | 7.20 | Full scope and zero surviving claims | The coverage sentence is the four-document sentence at the top of this file | Unit |
+| 7.21 | The quote matches only the heading prefix of the embedding string, and not the chunk’s `text` | Claim dropped. Quotes match the `text` column | Unit |
 
 ---
 
@@ -272,7 +280,7 @@ Unless a row says otherwise, the model clients are test doubles with counters, s
 | 8.16 | Retrieved set larger than 6 | The model payload contains at most 6 chunks | Double |
 | 8.17 | A chunk scored below `MIN_SCORE` | Absent from the model payload | Double |
 | 8.18 | Answered turn, coverage refusal, or scope decline | The assistant row stores `PROMPT_VERSION`. That includes a decline and a coverage refusal that never called the answer model | curl |
-| 8.20 | Twenty messages stored before the current in-scope message | The gate and the rewriter see the current message and the 12 stored messages that precede it. They do not see the older eight | Double |
+| 8.20 | Twenty messages stored before the current in-scope message | The scope gate sees the current message and the 12 stored messages that precede it. It does not see the older eight. The rewriter sees the latest user message and recent turns. That window is not fixed at 12 | Double |
 | 8.21 | `How should I brew kombucha at home?` | `not_in_corpus`. The answer names every document in the full corpus. Claims are `[]` | curl |
 | 8.22 | A question both dietary documents answer, such as cooking oil | Two blocks, two sources, no sentence that picks a winner | curl |
 | 8.23 | The same oil question prefixed with `according to the Eatwell Guide` | Every source is `eatwell-2018`, or the coverage sentence names only the Eatwell Guide | curl |
@@ -310,7 +318,7 @@ Check each layout case at a desktop width and at a narrow width. Side by side wh
 | ID | Corner | Expected | Check |
 | --- | --- | --- | --- |
 | 10.1 | `npm run eval` | Each of G1–G5, S1–S6, P1, and C1 is posted. Follow-ups share a conversation. Every other item uses a fresh conversation. Raw JSON is written under `evals/runs/<timestamp>/` | Script |
-| 10.2 | G1 and G2 | `coverage: "answered"`. Every claim has document name, publisher, year, and the document URL. The quote is a substring of the cited chunk. G1’s claims all cite the same dietary document | Eval tally |
+| 10.2 | G1 and G2 | `coverage: "answered"`. Every claim has document name, publisher, year, and the document URL. G1’s claims all cite the same dietary document. The quote check is the failure-log counter: the chat envelope has no `quote` and no `chunkId` | Eval tally, then the failure log |
 | 10.3 | G3 | Two blocks and two citations. The answer has no winner and does not say `the guidelines say` | Eval tally |
 | 10.4 | G4 | Every citation is the named document, or the coverage sentence names only that document | Eval tally |
 | 10.5 | G5 | `not_in_corpus`, claims empty, answer names the documents searched | Eval tally |

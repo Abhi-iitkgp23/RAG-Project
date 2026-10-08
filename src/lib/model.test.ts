@@ -1,18 +1,27 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { EmbeddingClient } from "./types";
+import type { EmbeddingClient, JsonSchema } from "./types";
 import {
+  COMPLETION_TEMPERATURE,
+  DEFAULT_CHAT_MODEL,
   DEFAULT_EMBEDDING_MODEL,
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MAX_INPUTS,
   EMBEDDING_MAX_TOKENS,
   EmbeddingDimensionError,
+  ModelOutputError,
+  STRUCTURED_OUTPUT_ATTEMPTS,
   batchEmbeddingInputs,
+  chatModelFromEnv,
+  embeddingDimensionsFromEnv,
+  localEmbeddingModelId,
   createEmbeddingClient,
+  createModelClient,
   embedQuery,
   estimateEmbeddingTokens,
+  parseModelObject,
 } from "./model";
 
-const envKeys = ["EMBEDDING_MODEL"] as const;
+const envKeys = ["EMBEDDING_MODEL", "EMBEDDING_DIMENSIONS", "OPENAI_MODEL"] as const;
 const previousEnv = new Map<string, string | undefined>();
 
 afterEach(() => {
@@ -74,6 +83,25 @@ describe("embedding client", () => {
     await client.embed(["question"]);
 
     expect(model).toBe("text-embedding-3-small");
+  });
+
+  it("reads the vector width from EMBEDDING_DIMENSIONS", () => {
+    rememberEnv("EMBEDDING_DIMENSIONS");
+    delete process.env.EMBEDDING_DIMENSIONS;
+    expect(embeddingDimensionsFromEnv()).toBe(EMBEDDING_DIMENSIONS);
+
+    process.env.EMBEDDING_DIMENSIONS = " 768 ";
+    expect(embeddingDimensionsFromEnv()).toBe(768);
+    process.env.EMBEDDING_DIMENSIONS = "0";
+    expect(() => embeddingDimensionsFromEnv()).toThrow("positive integer");
+  });
+
+  it("treats a local: model id as on-device and leaves API ids alone", () => {
+    expect(localEmbeddingModelId("text-embedding-3-small")).toBeNull();
+    expect(localEmbeddingModelId("local:")).toBeNull();
+    expect(localEmbeddingModelId("local:onnx-community/all-MiniLM-L6-v2-ONNX")).toBe(
+      "onnx-community/all-MiniLM-L6-v2-ONNX",
+    );
   });
 
   it("returns vectors in input order", async () => {
@@ -149,6 +177,196 @@ describe("embedding client", () => {
       ["how long does cooked chicken last in the refrigerator"],
     ]);
     expect(result).toEqual(vector(0.25));
+  });
+});
+
+const draftSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: { covered: { type: "boolean" } },
+  required: ["covered"],
+};
+
+describe("chat completion client", () => {
+  it("calls strict json_schema at temperature 0 and parses the object", async () => {
+    rememberEnv("OPENAI_MODEL");
+    delete process.env.OPENAI_MODEL;
+    let body: {
+      model: string;
+      temperature: number;
+      messages: { role: string; content: string }[];
+      response_format: {
+        type: string;
+        json_schema: { name: string; strict: boolean; schema: JsonSchema };
+      };
+    } | undefined;
+
+    const client = createModelClient({
+      completions: {
+        async create(request) {
+          body = request;
+          return {
+            choices: [
+              { message: { content: '{"covered":true,"extra":1}' } },
+            ],
+          };
+        },
+      },
+    });
+
+    const parsed = await client.complete({
+      system: "Return the draft.",
+      messages: [
+        { role: "user", content: "How long can cooked chicken stay?" },
+      ],
+      schema: draftSchema,
+      schemaName: "grounded_draft",
+    });
+
+    expect(body).toEqual({
+      model: DEFAULT_CHAT_MODEL,
+      temperature: COMPLETION_TEMPERATURE,
+      messages: [
+        { role: "system", content: "Return the draft." },
+        { role: "user", content: "How long can cooked chicken stay?" },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "grounded_draft",
+          strict: true,
+          schema: draftSchema,
+        },
+      },
+    });
+    expect(parsed).toEqual({ covered: true, extra: 1 });
+  });
+
+  it("reads the model id from OPENAI_MODEL", async () => {
+    rememberEnv("OPENAI_MODEL");
+    process.env.OPENAI_MODEL = " openai/gpt-oss-120b ";
+    let model = "";
+    const client = createModelClient({
+      completions: {
+        async create(request) {
+          model = request.model;
+          return { choices: [{ message: { content: "{}" } }] };
+        },
+      },
+    });
+
+    await client.complete({
+      system: "system",
+      messages: [],
+      schema: draftSchema,
+      schemaName: "grounded_draft",
+    });
+
+    expect(model).toBe("openai/gpt-oss-120b");
+    expect(chatModelFromEnv()).toBe("openai/gpt-oss-120b");
+  });
+
+  it("throws when the body is prose, empty, or not an object", () => {
+    expect(() => parseModelObject("not json {")).toThrow(ModelOutputError);
+    expect(() => parseModelObject("  ")).toThrow(ModelOutputError);
+    expect(() => parseModelObject('"just prose"')).toThrow(ModelOutputError);
+    expect(() => parseModelObject("[1]")).toThrow(ModelOutputError);
+    expect(() => parseModelObject("null")).toThrow(ModelOutputError);
+  });
+
+  it("does not resolve prose when the completion is not JSON", async () => {
+    const prose = "Eat 1,500 calories a day to lose weight.";
+    const client = createModelClient({
+      completions: {
+        async create() {
+          return { choices: [{ message: { content: prose } }] };
+        },
+      },
+    });
+
+    await expect(
+      client.complete({
+        system: "system",
+        messages: [{ role: "user", content: "calories?" }],
+        schema: draftSchema,
+        schemaName: "grounded_draft",
+      }),
+    ).rejects.toBeInstanceOf(ModelOutputError);
+  });
+
+  it("lets a provider error propagate", async () => {
+    let calls = 0;
+    const client = createModelClient({
+      completions: {
+        async create() {
+          calls += 1;
+          throw new Error("timeout");
+        },
+      },
+    });
+
+    await expect(
+      client.complete({
+        system: "system",
+        messages: [],
+        schema: draftSchema,
+        schemaName: "grounded_draft",
+      }),
+    ).rejects.toThrow("timeout");
+    expect(calls).toBe(1);
+  });
+
+  it("retries a Groq structured-output parse failure and keeps the next object", async () => {
+    let calls = 0;
+    const client = createModelClient({
+      model: "openai/gpt-oss-120b",
+      completions: {
+        async create(request) {
+          calls += 1;
+          expect(request.reasoning_effort).toBe("low");
+          if (calls === 1) {
+            const error = new Error("Parsing failed");
+            Object.assign(error, { code: "output_parse_failed" });
+            throw error;
+          }
+          return { choices: [{ message: { content: '{"covered":false,"claims":[]}' } }] };
+        },
+      },
+    });
+
+    await expect(
+      client.complete({
+        system: "system",
+        messages: [{ role: "user", content: "how many days honey can be stored" }],
+        schema: draftSchema,
+        schemaName: "grounded_draft",
+      }),
+    ).resolves.toEqual({ covered: false, claims: [] });
+    expect(calls).toBe(2);
+  });
+
+  it("stops after the structured-output attempt budget", async () => {
+    let calls = 0;
+    const client = createModelClient({
+      completions: {
+        async create() {
+          calls += 1;
+          const error = new Error("Parsing failed");
+          Object.assign(error, { error: { code: "json_validate_failed" } });
+          throw error;
+        },
+      },
+    });
+
+    await expect(
+      client.complete({
+        system: "system",
+        messages: [],
+        schema: draftSchema,
+        schemaName: "grounded_draft",
+      }),
+    ).rejects.toThrow("Parsing failed");
+    expect(calls).toBe(STRUCTURED_OUTPUT_ATTEMPTS);
   });
 });
 

@@ -25,7 +25,7 @@ export type Claim = {
   source: Source;
 };
 
-export type Coverage = "answered" | "not_in_corpus" | "declined";
+export type Coverage = "answered" | "not_in_corpus" | "declined" | "clarify";
 
 export type ChatResponse = {
   conversationId: string;
@@ -38,6 +38,24 @@ export type ChatResponse = {
     coverage: Coverage;
     createdAt: string;
   };
+};
+
+/** User turn as `GET /api/conversations/:id` returns it. */
+export type ConversationUserMessage = {
+  id: string;
+  role: "user";
+  content: string;
+  createdAt: string;
+};
+
+/**
+ * A reloaded thread. Assistant entries use the chat message shape so a
+ * reload can bind the sources panel to `claims`.
+ */
+export type ConversationResponse = {
+  conversationId: string;
+  createdAt: string;
+  messages: Array<ConversationUserMessage | ChatResponse["message"]>;
 };
 
 export type ChatRequest = {

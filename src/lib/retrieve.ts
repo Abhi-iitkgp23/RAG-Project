@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { float32ToVector } from "./embed";
-import { EMBEDDING_DIMENSIONS, embedQuery } from "./model";
+import { embedQuery, embeddingDimensionsFromEnv } from "./model";
 import type { EmbeddingClient, RetrieveRequest, RetrievedChunk } from "./types";
 
 /** Chunks below this cosine are not evidence. */
@@ -116,6 +116,14 @@ export function rankChunks(
 }
 
 /**
+ * Open `guidance.db` the way the app reads it. The connection is read-only.
+ * Conversation rows go to `nutrition.db`, never this file.
+ */
+export function openGuidanceDatabase(indexPath: string): Database.Database {
+  return new Database(indexPath, { readonly: true, fileMustExist: true });
+}
+
+/**
  * Read every chunk from `guidance.db`. Throws `GuidanceIndexError` when the
  * file is missing or is not a readable index.
  */
@@ -126,7 +134,7 @@ export function loadGuidanceIndex(indexPath: string): IndexedChunk[] {
 
   let db: Database.Database;
   try {
-    db = new Database(indexPath, { readonly: true, fileMustExist: true });
+    db = openGuidanceDatabase(indexPath);
   } catch (error) {
     throw new GuidanceIndexError(
       indexPath,
@@ -163,7 +171,7 @@ export function loadGuidanceIndex(indexPath: string): IndexedChunk[] {
           `chunk ${row.id} embedding is unreadable (${errorMessage(error)})`,
         );
       }
-      if (embedding.length !== EMBEDDING_DIMENSIONS) {
+      if (embedding.length !== embeddingDimensionsFromEnv()) {
         throw new GuidanceIndexError(
           indexPath,
           `chunk ${row.id} embedding has ${embedding.length} dimensions`,

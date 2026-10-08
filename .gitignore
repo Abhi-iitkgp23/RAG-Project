@@ -13,6 +13,7 @@
 data/guidance.db
 data/nutrition.db
 data/raw/
+data/models/
 evals/runs/
 
 .DS_Store

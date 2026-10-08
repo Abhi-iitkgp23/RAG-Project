@@ -35,7 +35,8 @@ function httpResponse(
   status: number,
   contentType: string,
 ): Response {
-  return new Response(body, {
+  const payload = typeof body === "string" ? body : Uint8Array.from(body);
+  return new Response(payload, {
     status,
     headers: { "content-type": contentType },
   });

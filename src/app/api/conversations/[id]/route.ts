@@ -1,5 +1,23 @@
 import { NextResponse } from "next/server";
+import {
+  conversationResponse,
+  getConversationStore,
+} from "../../../../lib/store";
 
-export function GET() {
-  return NextResponse.json({ error: "Not implemented" }, { status: 501 });
+type RouteContext = {
+  params: Promise<{ id: string }>;
+};
+
+/** Restore a thread. An id that was never created is 404. */
+export async function GET(
+  _request: Request,
+  context: RouteContext,
+): Promise<NextResponse> {
+  const { id } = await context.params;
+  const store = getConversationStore();
+  const conversation = store.getConversation(id);
+  if (!conversation) {
+    return NextResponse.json({ error: "Unknown conversation" }, { status: 404 });
+  }
+  return NextResponse.json(conversationResponse(store, conversation));
 }

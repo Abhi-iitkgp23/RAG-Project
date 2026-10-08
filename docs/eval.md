@@ -55,7 +55,7 @@ A complete source has non-empty `documentName`, `publisher`, and `url`, and a `y
 
 Any other combination fails the item.
 
-The quote is not in the HTTP body. The tally therefore checks the citation fields it can see. A person checks that each shipped claim is supported by the cited chunk, using the procedure under the failure log.
+A shipped claim is `text` plus `source`. The HTTP body has no `quote` and no `chunkId`, so the tally checks the citation fields it can see. A person checks that each shipped claim is supported by the cited section, using the procedure under the failure log.
 
 ## Frozen questions
 
@@ -90,7 +90,7 @@ C1 is one scored result. It passes only when C1-1, C1-2, and C1-3 each pass thei
 
 `coverage` is `answered`. Every claim has a complete source. Every source URL is the same dietary document, either Dietary Guidelines for Indians or the Eatwell Guide. A second dietary document fails G1. A storage URL fails G1. G3 is the item that requires both dietary documents.
 
-The quote check stays in the failure log. The envelope does not carry `quote`.
+The quote check stays in the failure log. The envelope carries neither `quote` nor `chunkId`.
 
 ### G2 — fridge life
 
@@ -247,7 +247,7 @@ Eval set: 1
 | Counter | How it is counted |
 | --- | --- |
 | Incomplete source | Any scored `answered` claim whose name, publisher, year, and url do not match one corpus row. The tally already fails these. The log lists the ids. |
-| Quote not in the cited chunk | For each `answered` claim, open `guidance.db`, find the chunk with that document URL and `sectionHeading`, and read its text. Record a miss when the claim text is not supported by a verbatim span of that chunk of at least 20 characters. Binding is supposed to have dropped these before they shipped. This counter is the check that it did. |
+| Quote not in the cited chunk | For each `answered` claim, open every chunk in `guidance.db` with that source URL and `sectionHeading`. Paragraph-split neighbours share a heading, so the heading is not one chunk. Record a miss when none of those chunks has a verbatim span of at least 20 characters in its `text` column that supports the claim. A span that appears only in the heading prefix of the embedding string does not count. Binding checks the model’s `quote` against one chunk before the claim ships. The run file does not store that quote, so this counter is the check a person can still do. |
 | Blended authority | `answer` ranks the documents, picks a publisher to follow, or speaks as if the corpus were one authority. G3’s phrase list is the automated part. Other winner wording is counted here. |
 | Coverage miss | G1, G2, or G3 is `not_in_corpus` or `declined`. G4 cites another document, or its coverage sentence names the full corpus. G5 is `answered` or `declined`. |
 | Scope miss | S1, S2, S3, S4, S5, or S6 is anything other than the professional decline. |

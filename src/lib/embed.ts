@@ -5,8 +5,8 @@ import { dirname, join } from "node:path";
 import type { GuidanceChunk } from "./chunk";
 import { FETCH_JSON_NAME, rawDirectory, type FetchRecord } from "./fetchCorpus";
 import {
-  EMBEDDING_DIMENSIONS,
   EmbeddingDimensionError,
+  embeddingDimensionsFromEnv,
   batchEmbeddingInputs,
   createEmbeddingClient,
   estimateEmbeddingTokens,
@@ -85,7 +85,7 @@ export function embeddingInput(sectionHeading: string, text: string): string {
 }
 
 export function vectorToFloat32(values: readonly number[]): Buffer {
-  if (values.length !== EMBEDDING_DIMENSIONS) {
+  if (values.length !== embeddingDimensionsFromEnv()) {
     throw new EmbeddingDimensionError(values.length);
   }
   const buffer = Buffer.alloc(values.length * 4);
@@ -340,7 +340,7 @@ function reusableEmbedding(
   ) {
     return null;
   }
-  if (stored.embedding.length !== EMBEDDING_DIMENSIONS * 4) return null;
+  if (stored.embedding.length !== embeddingDimensionsFromEnv() * 4) return null;
   return Buffer.from(stored.embedding);
 }
 
