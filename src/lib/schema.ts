@@ -31,7 +31,7 @@ export const sourceSchema = z.strictObject({
   publisher: z.string().min(1),
   year: z.number().int(),
   url: z.string().min(1),
-  sectionHeading: z.string().min(1),
+  sectionHeading: z.string(),
 });
 
 export const boundClaimSchema = z.strictObject({

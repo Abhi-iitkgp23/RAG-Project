@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { Public_Sans, Source_Serif_4 } from "next/font/google";
-import { SiteFooter, SiteHeader } from "./site-chrome";
 import "./globals.css";
 
 const publicSans = Public_Sans({
@@ -18,18 +17,14 @@ const sourceSerif = Source_Serif_4({
 });
 
 export const metadata = {
-  title: "Dietary guidance",
-  description: "Answers from official public dietary guidance.",
+  title: "Dietary Guidance Assistant",
+  description: "Evidence, made easier to understand.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${publicSans.variable} ${sourceSerif.variable}`}>
-      <body>
-        <SiteHeader />
-        {children}
-        <SiteFooter />
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

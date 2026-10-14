@@ -12,14 +12,14 @@ The app stores every conversation, validates every model response against a fixe
 | --- | --- | --- |
 | App | Next.js (App Router) + TypeScript | Chat UI and HTTP API |
 | Answer model | OpenAI, strict structured outputs | Returns claims bound to retrieved chunk ids. It does not write citations |
-| Embeddings | OpenAI `text-embedding-3-small` (1536 dimensions) | One vector per chunk at ingest time; one vector per question at request time |
+| Embeddings | On-device `nomic-ai/nomic-embed-text-v1.5` (768 dimensions, q8). Unset, `text-embedding-3-small` (1,536) | One vector per chunk at ingest time; one vector per question at request time |
 | Validation | Zod | Parses the grounded draft, then the server drops anything it cannot tie to a retrieved chunk |
 | Conversation store | SQLite via `better-sqlite3` | Conversations and messages |
 | Guidance index | SQLite file of chunks plus float32 vectors, cosine computed in process | Exact search over a few hundred chunks. A separate vector database is unnecessary at this corpus size |
 | Scope gate | Classifier plus a deterministic output scan | Runs before retrieval. A decline never reaches the corpus |
 | Deploy | Railway | Public URL, persistent disk for both SQLite files |
 
-The answer model and the embedding model sit behind small client interfaces so the route, the store, and the UI do not name a provider. This prototype implements OpenAI for both.
+The answer model and the embedding model sit behind small client interfaces so the route, the store, and the UI do not name a provider. The answer model uses an OpenAI-compatible client. Embeddings use that client when `EMBEDDING_MODEL` is an API id, and an on-device model when the id starts with `local:`.
 
 ## System overview
 
@@ -191,20 +191,20 @@ flowchart TD
 
 `dgi-2024` and `eatwell-2018` are parsed with `pdfjs-dist`. Each text item keeps its string, font size, and position. Items on the same baseline become a line. Lines become blocks.
 
-A line is a heading when its font size is above the page's body size, or when it is short and visually heavier than the surrounding lines. The nearest heading above a block is that block's `sectionHeading`. A heading stack is kept so a subsection still knows its parent chapter (`"Fats and oils › Visible fats"`).
+A line is a heading when it is at least 1.12 times the page body size (1.35 times when the line is longer than 100 characters), or when it is a short heavier line near body size. Wrapped heading lines of the same rank are joined. The heading stack is that block's `sectionHeading`, joined with ` › `, so a subsection still names its parent. On this extract many of those headings absorbed a following line or a table caption.
 
-A block is a table when several items share a baseline and line up in repeated horizontal positions across consecutive lines. Those lines stay in one unit and are rendered as rows of cells separated by ` | `, so a recommendation that lives in a table is still readable after extraction.
+A table is consecutive lines whose cells line up. A two-column gutter is not a table. Those lines stay in one unit and are rendered as rows of cells separated by ` | `, so a recommendation that lives in a table is still readable after extraction.
 
 A block matching a numbered recommendation (`1.`, `1)`, or a guideline number at the start of the line) is its own unit, through the paragraph that belongs to that number.
 
-Running headers, footers, and page numbers are dropped when the same short line repeats on most pages.
+A short margin line is dropped when the same text appears on at least 35% of pages, and a margin page number is dropped. A footer that includes the page number is a different string on each page, so it stays in the text.
 
 ### HTML
 
 `cold-storage-2023` and `fsa-chill-2017` are parsed with a DOM parser. Script, style, and navigation chrome are removed. The article body is walked in order.
 
 - A heading (`h1`–`h3`) starts a section and becomes `sectionHeading`.
-- A `table` is one unit. It is rendered as markdown so each row stays intact. The Cold Food Storage Chart is then split one level further: each food-category group (the row that names the food, plus the rows under it until the next category) is its own chunk. A question about leftover chicken retrieves that category, and a storage-time row is never cut between the food name and the refrigerator time.
+- A `table` is one unit. Each row stays intact, and cells in a row are joined with ` | `. The Cold Food Storage Chart is then split one level further: each food-category group (the row that names the food, plus the rows under it until the next category) is its own chunk. A question about leftover chicken retrieves that category, and a storage-time row is never cut between the food name and the refrigerator time.
 - A list stays with its heading.
 - Paragraphs under a heading accumulate into that section until the next heading of the same or higher rank.
 
@@ -231,7 +231,7 @@ Parameters, also stated in the README:
 | Target size | 1,200 characters (about 300 tokens) |
 | Hard max | 2,000 characters |
 | Overlap | 200 characters, and only on the paragraph split of an oversized narrative section |
-| Embedding model | `text-embedding-3-small` |
+| Embedding model | On-device `nomic-ai/nomic-embed-text-v1.5` (768). Unset, `text-embedding-3-small` (1,536) |
 | Index type | Flat exact cosine over float32 vectors in SQLite |
 | `k` | 6 |
 | `MIN_SCORE` | 0.30 cosine. Chunks below this are not evidence. If every hit is below it, the turn is "not in the guidance" and the answer model is not called |
@@ -249,7 +249,7 @@ Every chunk stores:
 
 **What stays whole.** Numbered recommendations, tables that fit, storage-chart categories, and headed sections under 2,000 characters.
 
-**What still gets split.** A long narrative section with no inner heading is cut on paragraph boundaries, with 200 characters of overlap, so a sentence at the cut can appear in both neighbours. A very large table is cut between rows and each piece repeats the header. Overlap is how those two pieces stay interpretable, and it is also how a recommendation that sits on the boundary can be retrieved twice. The README records this cost in those words.
+**What still gets split.** A long narrative section with no inner heading is cut on paragraph boundaries, with 200 characters of overlap, so the last 200 characters of a piece are embedded again in the next piece. A paragraph that is still over 2,000 characters stays whole. When the other paragraphs in that section are under 80 characters, they merge back and the chunk stays a `section`. A very large table is cut between rows and each piece repeats the header. Overlap is not applied to tables or to recommendations. The README records this cost in those words.
 
 Chunks under 80 characters of prose (a bare heading, a page number that survived cleanup) are merged into the following chunk of the same document. A heading with no body is not indexed on its own.
 
@@ -388,15 +388,21 @@ A claim that fails steps 1–3 does not ship. There is no repair pass that fills
 
 The server writes `answer` from the claims that survived. Document order follows the corpus table, so the same evidence produces the same layout on a later run.
 
-One document:
+One document, each claim in its own paragraph:
 
-> {claim texts, in order}
-
-More than one document, one block each:
-
-> **{documentName}** ({publisher}, {year}): {that document's claim texts}
+> {claim text}
 >
-> **{documentName}** ({publisher}, {year}): {that document's claim texts}
+> {claim text}
+
+More than one document, a heading then that document's claims:
+
+> **{documentName}** ({publisher}, {year})
+>
+> {claim text}
+>
+> **{documentName}** ({publisher}, {year})
+>
+> {claim text}
 
 The blocks are concatenated with a blank line. The server adds no sentence that ranks the documents, merges them into "the guidelines", or tells the reader which publisher to follow. Because the model does not supply `answer`, it cannot add that sentence either.
 
@@ -662,7 +668,7 @@ type EmbeddingClient = {
 };
 ```
 
-Answer completions and the scope classifier use temperature `0` and strict `json_schema`. Embeddings use `text-embedding-3-small`. Query embeddings are computed one string at a time on the request path. Corpus embeddings are computed in batches during ingest. Chunk text that has not changed (same `contentHash` and same chunk text) keeps its stored vector.
+Answer completions and the scope classifier use temperature `0` and strict `json_schema`. This deployment embeds with on-device `nomic-ai/nomic-embed-text-v1.5` at 768 dimensions. A chunk is prefixed `search_document: ` and a query is prefixed `search_query: `. Unset, embeddings use `text-embedding-3-small` at 1,536 dimensions and a query is the question alone. Query embeddings are computed one string at a time on the request path. Corpus embeddings are computed in batches during ingest: 8 inputs and 8,192 estimated tokens on device, 2,048 inputs and 300,000 tokens on the API. A chunk keeps its stored vector when `contentHash` is unchanged, the embedding input is unchanged, and the stored width matches `EMBEDDING_DIMENSIONS`.
 
 ## HTTP API
 
@@ -720,10 +726,11 @@ Returns the conversation and its messages in order, using the same message shape
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | yes | Answer model, scope classifier, query embeddings, ingest embeddings |
+| `OPENAI_API_KEY` | yes | Answer model and scope classifier. Embeddings use it only when `EMBEDDING_MODEL` is not a `local:` id |
 | `OPENAI_MODEL` | no | Answer-model id. Default a model that supports strict `json_schema` |
-| `EMBEDDING_MODEL` | no | Default `text-embedding-3-small` |
-| `DATA_DIR` | no | Directory for `nutrition.db` and `guidance.db`. Default `./data` |
+| `EMBEDDING_MODEL` | no | Default `text-embedding-3-small`. This deployment sets `local:nomic-ai/nomic-embed-text-v1.5` |
+| `EMBEDDING_DIMENSIONS` | no | Vector width. Default 1,536. This deployment sets 768 |
+| `DATA_DIR` | no | Directory for `nutrition.db`, `guidance.db`, and on-device model weights. Default `./data` |
 
 No key is prefixed for the browser. No model or embedding request is issued from a client component.
 
@@ -780,5 +787,5 @@ The README states the decisions this document fixes, in one place an assessor ca
 
 - Corpus: the four URLs, with publisher, year, and the retrieval date ingest recorded.
 - Chunking: structure-aware units, target 1,200 characters, hard max 2,000, overlap 200 only on oversized narrative splits. What stays whole, and what still gets split.
-- Retrieval: `text-embedding-3-small`, flat cosine in SQLite, `k = 6`, `MIN_SCORE = 0.30`, full-corpus and single-document filter.
+- Retrieval: on-device `nomic-ai/nomic-embed-text-v1.5` at 768 dimensions, with `text-embedding-3-small` as the unset default; flat cosine in SQLite, `k = 6`, `MIN_SCORE = 0.30`, full-corpus and single-document filter.
 - Answer rule: a claim ships only with a server-built citation. The two refusal sentences, and which code path emits each.

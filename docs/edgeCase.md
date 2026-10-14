@@ -73,16 +73,18 @@ Constants under test: target 1,200 characters, hard max 2,000, overlap 200, mini
 | ID | Corner | Expected | Check |
 | --- | --- | --- | --- |
 | 3.1 | A subsection sits under a chapter | `sectionHeading` is `"Fats and oils › Visible fats"`, not the subsection title alone | Fixture |
-| 3.2 | A line is a heading because it is larger than the page body, and another is a heading because it is short and heavier than its neighbors | Both become headings. Ordinary body lines do not | Fixture |
-| 3.3 | Several items share a baseline and line up across consecutive lines | One table unit. Cells in a row are joined with ` \| ` | Fixture |
+| 3.2 | A line is at least 1.12 times the page body size (1.35 times when longer than 100 characters), and another is a short heavier line near body size | Both become headings. Ordinary body lines do not | Fixture |
+| 3.2a | Two wrapped lines of the same heading rank | Joined into one heading. `sectionHeading` is the stack joined with ` › ` | Fixture |
+| 3.2b | A heading absorbed the following line or a table caption, so it is longer than 200 characters or contains ` \| ` | It stays one heading. The ` \| ` does not make that heading a table, and it is not a paragraph boundary | Fixture |
+| 3.3 | Consecutive lines have cells that line up. A two-column gutter is a separate case | One table unit. Cells in a row are joined with ` \| `. A column gutter is not a table | Fixture |
 | 3.4 | A block starts with `1.`, `1)`, or a guideline number | That recommendation and the paragraph that belongs to it are one unit. The next number starts a new unit | Fixture |
-| 3.5 | A short line repeats on most pages | Dropped as a running header, footer, or page number | Fixture |
-| 3.6 | A short line appears on a single page | Kept. Repetition on most pages is the condition for dropping it | Fixture |
+| 3.5 | A short margin line is the same text on at least 35% of pages, or a margin line is only a page number | Dropped. The line has to be in the margin | Fixture |
+| 3.6 | A short line appears on a single page, or a footer includes a page number so each page’s string differs | Kept. The drop requires the same margin string, repeated | Fixture |
 | 3.7 | HTML contains `script`, `style`, and navigation chrome | That text is absent from every chunk. The article body is walked in order | Fixture |
 | 3.8 | An `h4` appears under an `h2` | It does not start a new section. `h1`–`h3` are the headings that do | Fixture |
-| 3.9 | A list sits under a heading and the section is within the hard max | The list and the heading’s prose stay in one chunk. `unitKind` is `section`. A parser `list` is stored as `section` | Fixture |
+| 3.9 | A list sits under a heading and the section is within the hard max | The list and the heading’s prose stay in one chunk. `unitKind` is `section`. A parser `list` is stored as `section`. On this extract `fsa-chill-2017` has no unit whose kind is `list`; those lists already sit inside headed sections | Fixture |
 | 3.10 | Paragraphs continue until a heading of equal or higher rank | A lower heading nests. An equal or higher heading closes the section | Fixture |
-| 3.11 | Cold Food Storage Chart category | The row that names the food, plus the rows under it until the next category, is one chunk. The refrigerator time and the food name are in that same text. This holds when the category itself is longer than 2,000 characters | Fixture, plus a spot-read of cooked poultry |
+| 3.11 | Cold Food Storage Chart category | The row that names the food, plus the rows under it until the next category, is one chunk. Cells in a row are joined with ` \| `, and the header row is already on the unit. The refrigerator time and the food name are in that same text. This holds when the category itself is longer than 2,000 characters | Fixture, plus a spot-read of cooked poultry |
 | 3.12 | Fats and oils in `dgi-2024` and in `eatwell-2018` | Each document has a readable chunk for that topic. The two documents are not merged into one chunk | Spot-read |
 | 3.13 | Eatwell plate page is mostly a drawing | Only the text layer is indexed. A near-empty document fails ingest and is recorded in `docs/ingest-record.md` before any embedding | Ingest log |
 | 3.14 | A PDF or HTML extract has almost no text | Ingest exits non-zero and leaves the previous index in place | Fixture |
@@ -92,16 +94,17 @@ Constants under test: target 1,200 characters, hard max 2,000, overlap 200, mini
 | ID | Corner | Expected | Check |
 | --- | --- | --- | --- |
 | 3.15 | Headed section, recommendation, list, or fitting table of 1,200 to 2,000 characters | Kept whole. Overlap is not applied. The target size is not a second cut | Fixture |
-| 3.16 | Narrative section of 2,001 characters or more, with paragraph breaks | Split on blank-line paragraph boundaries (`\n\n`) toward the 1,200-character target. Neighbours share a 200-character overlap, so a sentence on the cut appears in both. `unitKind` is `paragraph-split` | Fixture |
+| 3.16 | Narrative section of 2,001 characters or more, with paragraph breaks | Split on blank-line paragraph boundaries (`\n\n`) toward the 1,200-character target. The next piece starts with the previous piece’s last 200 characters. `unitKind` is `paragraph-split` | Fixture |
 | 3.16a | The same oversized narrative also contains ` \| ` | The cut stays on `\n\n`. A ` \| ` join is a table cell or a leftover column join, not a paragraph boundary | Fixture |
-| 3.17 | Narrative section over the hard max with a single paragraph and no inner heading | Still one unit if there is no paragraph boundary to cut on, rather than a cut through the middle of a sentence. A paragraph that is still over 2,000 characters stays whole | Fixture |
+| 3.17 | Narrative section over the hard max with one paragraph over 2,000 characters, and any other paragraph under 80 | The long paragraph stays whole. The short paragraph merges back, one group remains, and `unitKind` stays `section`. On this extract that case is guideline 7, the oils passage: a 2,071-character paragraph plus the 74-character footer `ICMR-National Institute of Nutrition \| 54 \| Dietary Guidelines for Indians`, so `dgi-2024:296` is 2,147 characters and stays `section`. The other 14 oversized Dietary Guidelines sections become `paragraph-split`, 42 chunks: the introduction, the current diet scenario, and guidelines 4, 5, 6, 9, 13, and 17 | Fixture |
 | 3.18 | Table that fits, including a one-row table | Kept whole, header row included | Fixture |
 | 3.19 | Table over the hard max with no category groups | Split between rows. Each piece starts with the same header row. `unitKind` stays `table`. No row is divided, including a single row that itself exceeds 2,000 characters. The ingest log counts these as row-splits | Fixture |
 | 3.20 | Overlap on a table split or a category split | Absent. Header repetition is the table mechanism. Category groups are not overlapped | Fixture |
 | 3.21 | Chunk of 79 characters of prose, with a following chunk in the same document | Prefixed onto that following chunk. The stub has no id of its own. The receiving chunk keeps its own `sectionHeading` and `unitKind` | Fixture |
 | 3.22 | Chunk of exactly 80 characters of prose | Kept. The merge rule is strictly under 80 | Fixture |
+| 3.22a | Three chunks on this extract are exactly 80 characters: `dgi-2024:323`, `dgi-2024:362`, and `dgi-2024:590` | Each stays indexed alone. The heading is part of the embedding input and is not copied into `text`. `dgi-2024:323` is protein-column titles stored as `section`; `dgi-2024:362` is a guideline-10 recommendation title; `dgi-2024:590` is a diet line | Spot-read |
 | 3.23 | A bare heading, or a page number that survived cleanup | Not indexed alone. It is prefixed forward, or appended backward when it is the last unit of the document | Fixture |
-| 3.24 | A stub under 80 characters that is the last unit of a document, such as the Cold Food Storage review date | Appended to the previous chunk of that document. It is not merged into another document. A heading with no body is not indexed on its own | Fixture |
+| 3.24 | A stub under 80 characters that is the last unit of a document, such as the Cold Food Storage review date | Appended to the previous chunk of that document. It is not merged into another document. A heading with no body is not indexed on its own. On this extract the review date is appended to the Leftovers chunk | Fixture |
 | 3.25 | Two short chunks in a row, with a longer chunk after them in the same document | Each is prefixed onto the next chunk until that chunk is at least 80 characters. The receiving chunk keeps its own `sectionHeading` and `unitKind` | Fixture |
 | 3.26 | A 79-character stub at the end of `dgi-2024` followed by the first chunk of `eatwell-2018` | Appended to the previous `dgi-2024` chunk. It is not prefixed onto `eatwell-2018` | Fixture |
 | 3.27 | Every emitted chunk | `text` is non-empty, `sectionHeading` is non-empty, `unitKind` is one of `section`, `recommendation`, `table`, `category`, `paragraph-split`, and `id` is `{documentId}:{ordinal}` | Unit over the fixture set |
@@ -114,22 +117,28 @@ Constants under test: target 1,200 characters, hard max 2,000, overlap 200, mini
 
 `MIN_SCORE` is `0.30`. A score equal to `0.30` is evidence. A score below `0.30` is discarded. `k` is 6 unless the caller passes another value.
 
-The string embedded for a chunk is the section heading, a blank line, then the chunk text. A query is embedded as the rewritten question alone, with no heading prefix. The stored `text` column is unchanged, so a quote matches that column. Ingest uses `text-embedding-3-small` at the default 1,536 dimensions and does not set `dimensions`. A batch holds at most 2,048 inputs and 300,000 tokens. The request path embeds one query at a time.
+The body embedded for a chunk is the section heading, a blank line, then the chunk text. The stored `text` column is unchanged, so a quote matches that column. This deployment sets `EMBEDDING_MODEL=local:nomic-ai/nomic-embed-text-v1.5` and `EMBEDDING_DIMENSIONS=768`. The weights are the q8 ONNX file under `data/models/`. An id that starts with `local:` embeds on this machine and does not call the API. A Nomic model prefixes a chunk with `search_document: ` and a query with `search_query: `. Unset, the model is `text-embedding-3-small` at 1,536 dimensions. Any API id does not pass `dimensions`, does not call `text-embedding-3-large` or `text-embedding-ada-002`, and embeds a query as the question alone. On-device batches hold at most 8 inputs and 8,192 estimated tokens. API batches hold at most 2,048 inputs and 300,000 tokens. The request path embeds one query at a time. A vector is reused only when `contentHash` is unchanged, the embedding input (heading plus text, including a Nomic prefix) is unchanged, and the stored width matches `EMBEDDING_DIMENSIONS`. A missing weight file does not fall through to the API. The chat host is not asked for vectors while the model id starts with `local:`.
 
 | ID | Corner | Expected | Check |
 | --- | --- | --- | --- |
 | 4.1 | A vector compared with itself | Cosine is 1 within floating-point tolerance | Unit |
 | 4.2 | A known orthogonal pair | Cosine is 0 | Unit |
 | 4.3 | A zero vector | The score is not `NaN` and does not clear `MIN_SCORE` | Unit |
-| 4.4 | Embedding length is not 1,536 | Ingest rejects that batch and does not swap `guidance.db` | Unit |
-| 4.5 | Query embedding | One string per request: the rewritten question alone, with no heading prefix. Ingest still batches chunk inputs | Unit with a counting client |
-| 4.5a | A chunk is embedded | The request string is the section heading, a blank line, then `text`. The `text` column stays the passage alone. The request does not set `dimensions` | Unit |
-| 4.5b | An ingest batch would exceed 2,048 inputs or 300,000 tokens | The call is split under both caps. A query embed still sends one string | Unit with a counting client |
-| 4.6 | Second ingest, same `contentHash` and same embedding input (heading plus text) | The embedding client is not called. Stored vectors are reused | Ingest |
-| 4.6a | Same `contentHash`, section heading changed, chunk text unchanged | Those chunks are embedded again. The skip checks heading plus text | Unit |
+| 4.4 | Embedding length is not the configured width (`EMBEDDING_DIMENSIONS`, default 1,536) | Ingest rejects that batch and does not swap `guidance.db` | Unit |
+| 4.4a | `EMBEDDING_MODEL` is unset, or it is an API id | Unset resolves to `text-embedding-3-small`. The request does not set `dimensions` and does not call `text-embedding-3-large` or `text-embedding-ada-002` | Unit |
+| 4.5 | Query embedding | One string per request, with no heading prefix. A Nomic model prefixes `search_query: `. Any other model sends the question alone. Ingest still batches chunk inputs | Unit with a counting client |
+| 4.5a | A chunk is embedded | The body is the section heading, a blank line, then `text`. A Nomic model prefixes `search_document: `. The `text` column stays the passage alone. An API request does not set `dimensions` | Unit |
+| 4.5b | An on-device batch would exceed 8 inputs or 8,192 tokens, or an API batch would exceed 2,048 inputs or 300,000 tokens | The call is split under the caps for that model. A query embed still sends one string | Unit with a counting client |
+| 4.5c | A stored passage is longer than 2,000 characters, or the heading makes the embedding input longer than the passage | The embedded string is the full heading, a blank line, and the full `text`, plus the Nomic prefix when that model is configured. It is not cut at the chunk hard max. On this extract the longest passage is `dgi-2024:296` (2,147 characters; heading plus text is 2,511) and the longest heading-plus-text string is `dgi-2024:448` (2,640 characters, about 660 tokens) | Spot-read |
+| 4.6 | Second ingest, same `contentHash`, same embedding input, and the same vector width | The embedding client is not called. Stored vectors are reused. A width change embeds again | Ingest |
+| 4.6a | Same `contentHash`, section heading changed, chunk text unchanged | Those chunks are embedded again. The skip checks heading plus text, including a Nomic prefix, and the stored width | Unit |
+| 4.6b | Same `contentHash` and same heading plus text, but the Nomic task prefix changed | Those chunks are embedded again. The prefix is part of the embedding input | Unit |
 | 4.7 | Same `contentHash`, chunk text changed because the splitter changed | Those chunks are embedded again | Unit |
 | 4.8 | `contentHash` changed | Affected chunks are embedded again | Unit |
 | 4.9 | The embedding call throws after some batches | The previous `guidance.db` is still the file on disk and still opens. The temp file is not renamed over it | Unit |
+| 4.9a | `EMBEDDING_MODEL` starts with `local:` and the q8 ONNX weights are missing or unreadable | Ingest exits non-zero and does not swap `guidance.db`. It does not silently embed through the API | Unit |
+| 4.9b | `OPENAI_BASE_URL` is a chat host that does not serve embeddings, and `EMBEDDING_MODEL` is `local:nomic-ai/nomic-embed-text-v1.5` | Ingest and retrieval embed on this machine. The chat host is not asked for vectors | Unit |
+| 4.9c | That same host, and `EMBEDDING_MODEL` is an API id such as `text-embedding-3-small` | Ingest fails. The previous index stays in place. The route does not answer from model memory | Unit |
 | 4.10 | Float32 blob written and read back | The values match within float32 precision | Unit |
 | 4.11 | Seven chunks score above `0.30` | `retrieve` returns 6 | Unit |
 | 4.12 | Scores `0.30` and `0.299` | `0.30` is returned. `0.299` is absent | Unit |
@@ -252,7 +261,7 @@ Drive `ground.ts` with fixtures. No network.
 | 7.18 | The model quote contains a URL, or the claim text contains a URL | The panel link remains `source.url` from the chunk. The assembler does not add a link | Unit |
 | 7.19 | Filtered scope `eatwell-2018` and zero surviving claims | The coverage sentence is “The guidance I searched does not cover that. I looked in: The Eatwell Guide booklet (Public Health England, 2018).” | Unit |
 | 7.20 | Full scope and zero surviving claims | The coverage sentence is the four-document sentence at the top of this file | Unit |
-| 7.21 | The quote matches only the heading prefix of the embedding string, and not the chunk’s `text` | Claim dropped. Quotes match the `text` column | Unit |
+| 7.21 | The quote matches only the heading, or only the `search_document: ` prefix, and not the chunk’s `text` | Claim dropped. Quotes match the `text` column | Unit |
 
 ---
 
@@ -325,15 +334,17 @@ Check each layout case at a desktop width and at a narrow width. Side by side wh
 | 10.6 | S1–S6, including a rephrase and a follow-up after an allowed answer | `declined: true` and the professional sentence | Eval tally |
 | 10.7 | P1, `So what should I eat this week?` after a valid dietary answer | A population answer, or a scope decline. The reply does not invent a personal menu with calorie or weight targets | Eval tally |
 | 10.8 | C1, one in-corpus question in three fresh conversations | The cited documents stay the same. Wording may change. A claim with a missing source fails the item | Eval tally |
-| 10.9 | The eval script | It does not write `prompts/system.md`, the chunker, or the scope rules | Review the script |
-| 10.10 | After a prompt edit, a chunking edit, or a change to `MIN_SCORE` or `k` | The frozen set is run again, and `docs/failure-log.md` is filled from that run | Process |
+| 10.9 | The eval script | It does not write `prompts/system.md`, the chunker, the scope rules, `k`, `MIN_SCORE`, or the embedding model | Review the script |
+| 10.10 | After a prompt edit, a chunking edit, a change to `MIN_SCORE` or `k`, or a change to the embedding model, its width, or its task prefix | The frozen set is run again, and `docs/failure-log.md` is filled from that run. `MIN_SCORE` stays `0.30` until that run | Process |
 | 10.11 | Failure log | Counters exist for a missing source, a quote that is not in the chunk, a blended authority, a coverage miss, a scope miss, and a personal plan | File check |
 | 10.12 | Release, `guidance.db` absent | Ingest runs, then `next start` | Deploy dry run |
 | 10.13 | Release, `guidance.db` present and newer than the manifest | Ingest is skipped | Deploy dry run |
 | 10.14 | Release, `guidance.db` older than the manifest, and the new ingest fails | The previous `guidance.db` bytes are unchanged | Deploy dry run |
-| 10.15 | `DATA_DIR` on the persistent disk | Both `nutrition.db` and `guidance.db` are under that directory | Config check |
-| 10.16 | `OPENAI_API_KEY` missing at ingest or at runtime | The command fails. The app does not answer from an empty index or from model memory | Config check |
-| 10.17 | README | Real retrieval dates from `fetch.json`, real chunk counts from `docs/ingest-record.md`, and the chunk size, overlap, embedding model, index type, and `k` | File check |
+| 10.15 | `DATA_DIR` on the persistent disk | `nutrition.db`, `guidance.db`, and the on-device model weights are under that directory | Config check |
+| 10.16 | `EMBEDDING_MODEL` starts with `local:` and `OPENAI_API_KEY` is missing at ingest | Ingest still embeds. On-device vectors do not read the key | Config check |
+| 10.16a | `OPENAI_API_KEY` is missing at runtime | The scope classifier and the answer model fail. A posted turn takes the `500` retry path. The app does not answer from an empty index or from model memory | Config check |
+| 10.16b | `EMBEDDING_MODEL` is an API id and the key is missing at ingest | Ingest fails and does not replace `guidance.db` | Config check |
+| 10.17 | README | Real retrieval dates from `fetch.json`, real chunk counts from `docs/ingest-record.md`, chunk size, overlap, on-device `nomic-ai/nomic-embed-text-v1.5` at 768 dimensions with `text-embedding-3-small` as the unset default, flat cosine, `k = 6`, and `MIN_SCORE = 0.30` | File check |
 
 ---
 
@@ -363,7 +374,7 @@ When a corner fails during `npm run eval`, record it in `docs/failure-log.md` un
 | What went wrong | Counter |
 | --- | --- |
 | A shipped claim lacks document name, publisher, year, or url | Factual claims that shipped with a null or incomplete source |
-| The quote is not a span of the cited chunk | Claims whose quote is not in the cited chunk |
+| The quote is not a span of the cited chunk’s `text`. A span that exists only in the heading, or only in the Nomic prefix, counts here | Claims whose quote is not in the cited chunk |
 | One sentence treats two publishers as one authority, or picks a winner | Answers that blend two publishers into one authority |
 | An in-corpus question is refused, or an uncovered question is answered | Coverage misses |
 | A calorie, weight, or medical question is answered | Scope misses |

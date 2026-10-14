@@ -88,6 +88,8 @@ export type ConversationStore = {
   ): StoredAssistantMessage;
   listMessages(conversationId: string): StoredMessage[];
   messagesPreceding(messageId: string, limit?: number): StoredMessage[];
+  /** Removes one conversation and its messages. False when the id is unknown. */
+  deleteConversation(id: string): boolean;
   close(): void;
 };
 
@@ -173,6 +175,16 @@ export function openConversationStore(dbPath: string): ConversationStore {
      order by rowid desc
      limit ?`,
   );
+  const deleteMessages = db.prepare(
+    `delete from messages where conversation_id = ?`,
+  );
+  const deleteConversationRow = db.prepare(
+    `delete from conversations where id = ?`,
+  );
+  const removeConversation = db.transaction((id: string) => {
+    deleteMessages.run(id);
+    deleteConversationRow.run(id);
+  });
 
   let closed = false;
 
@@ -223,6 +235,11 @@ export function openConversationStore(dbPath: string): ConversationStore {
     listMessages(conversationId) {
       const rows = selectMessages.all(conversationId) as MessageRow[];
       return rows.map(mapMessageRow);
+    },
+    deleteConversation(id) {
+      if (!selectConversation.get(id)) return false;
+      removeConversation(id);
+      return true;
     },
     messagesPreceding(messageId, limit = PRECEDING_MESSAGE_LIMIT) {
       const resolved = resolveLimit(limit);

@@ -1,32 +1,78 @@
-export function SiteHeader() {
+export function BrandLockup() {
   return (
-    <header className="site-header">
-      <div className="frame site-header-inner">
-        <div className="brand-lockup">
-          <div className="brand-row">
-            <h1>Dietary guidance</h1>
-            <span className="service-badge">Official Service</span>
-          </div>
-          <p>Answers from official public dietary guidance</p>
-        </div>
+    <div className="brand">
+      <div className="brand-copy">
+        <h1>Dietary Guidance Assistant</h1>
+        <p>Evidence, made easier to understand.</p>
       </div>
-    </header>
+    </div>
   );
 }
 
-export function SiteFooter() {
+const HOW_STEPS = [
+  {
+    index: "01",
+    title: "Ask a question",
+    body: "Ask about everyday dietary guidance or food safety.",
+  },
+  {
+    index: "02",
+    title: "Find relevant guidance",
+    body: "The system searches approved public documents for passages related to the question.",
+  },
+  {
+    index: "03",
+    title: "Get a cited answer",
+    body: "The assistant summarizes relevant evidence and links claims to supporting sources.",
+  },
+  {
+    index: "04",
+    title: "Check the evidence",
+    body: "Open the citations to verify the original guidance. If the available evidence is insufficient, the assistant should say so rather than guess.",
+  },
+] as const;
+
+export function HowItWorks({ onViewSources }: { onViewSources: () => void }) {
   return (
-    <footer className="site-footer">
-      <div className="frame site-footer-inner">
-        <div>
-          <p className="footer-title">Dietary guidance · Published sources only</p>
-          <p>
-            Answers come from four public guidance documents. This is not an
-            individual medical assessment. For personal advice, consult a
-            licensed practitioner.
-          </p>
-        </div>
-      </div>
-    </footer>
+    <div className="works-copy">
+      <ol className="works-steps">
+        {HOW_STEPS.map((step) => (
+          <li key={step.index}>
+            <h3>
+              <span className="works-index">{step.index}</span>
+              <span className="works-dash" aria-hidden="true">
+                {" "}
+                —{" "}
+              </span>
+              {step.title}
+            </h3>
+            <p>{step.body}</p>
+          </li>
+        ))}
+      </ol>
+      <p className="works-limit">
+        This assistant provides general dietary and food-safety guidance, not
+        personalized calorie targets, weight recommendations, or medical advice.
+      </p>
+      <button type="button" className="works-sources" onClick={onViewSources}>
+        View all sources
+      </button>
+    </div>
+  );
+}
+
+export function AboutAssistant() {
+  return (
+    <section className="about" aria-labelledby="about-title">
+      <h2 id="about-title">About this assistant</h2>
+      <p>
+        Provides general dietary guidance and food safety information from official
+        sources.
+      </p>
+      <p>
+        It does not provide personalized calorie targets, weight recommendations, or
+        medical advice.
+      </p>
+    </section>
   );
 }

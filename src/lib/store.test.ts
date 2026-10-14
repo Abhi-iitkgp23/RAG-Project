@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { GET } from "../app/api/conversations/[id]/route";
+import { DELETE, GET } from "../app/api/conversations/[id]/route";
 import { GUIDANCE_DB_NAME } from "./embed";
 import { openGuidanceDatabase } from "./retrieve";
 import {
@@ -331,6 +331,52 @@ describe("conversation store", () => {
     } finally {
       guidance.close();
     }
+  });
+});
+
+describe("DELETE /api/conversations/:id", () => {
+  it("returns 404 for an id that was never created", async () => {
+    const store = openTemp(await tempDir());
+    setConversationStore(store);
+
+    const response = await DELETE(new Request("http://localhost/api/conversations/missing", { method: "DELETE" }), {
+      params: Promise.resolve({ id: "missing" }),
+    });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Unknown conversation" });
+  });
+
+  it("deletes one conversation and its messages and leaves the others", async () => {
+    const directory = await tempDir();
+    const path = nutritionDbPath(directory);
+    const store = openConversationStore(path);
+    stores.push(store);
+    setConversationStore(store);
+
+    const keep = store.createConversation();
+    store.appendUserMessage(keep.id, "How long can cooked chicken stay in the fridge?");
+    const remove = store.createConversation();
+    store.appendUserMessage(remove.id, "What should I eat daily?");
+    store.appendAssistantMessage(remove.id, assistantInput("clarify", "Which meal?", []));
+
+    const response = await DELETE(
+      new Request(`http://localhost/api/conversations/${remove.id}`, { method: "DELETE" }),
+      { params: Promise.resolve({ id: remove.id }) },
+    );
+
+    expect(response.status).toBe(204);
+    expect(store.getConversation(remove.id)).toBeNull();
+    expect(store.listMessages(remove.id)).toEqual([]);
+    expect(store.getConversation(keep.id)?.id).toBe(keep.id);
+    expect(store.listMessages(keep.id)).toHaveLength(1);
+    expect(countConversations(path)).toBe(1);
+
+    const missing = await GET(
+      new Request(`http://localhost/api/conversations/${remove.id}`),
+      { params: Promise.resolve({ id: remove.id }) },
+    );
+    expect(missing.status).toBe(404);
   });
 });
 

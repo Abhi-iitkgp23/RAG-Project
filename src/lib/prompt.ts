@@ -6,7 +6,7 @@ import type { JsonSchema } from "./types";
  * Stored on every assistant row. Bump this when `prompts/system.md` changes,
  * then re-run the frozen question set.
  */
-export const PROMPT_VERSION = "3";
+export const PROMPT_VERSION = "4";
 
 export const GROUNDED_DRAFT_SCHEMA_NAME = "grounded_draft";
 

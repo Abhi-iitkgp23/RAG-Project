@@ -6,10 +6,16 @@ import type { GuidanceChunk } from "./chunk";
 import { FETCH_JSON_NAME, rawDirectory, type FetchRecord } from "./fetchCorpus";
 import {
   EmbeddingDimensionError,
+  NOMIC_DOCUMENT_PREFIX,
   embeddingDimensionsFromEnv,
+  embeddingModelFromEnv,
   batchEmbeddingInputs,
   createEmbeddingClient,
   estimateEmbeddingTokens,
+  localEmbeddingModelId,
+  LOCAL_EMBEDDING_MAX_INPUTS,
+  LOCAL_EMBEDDING_MAX_TOKENS,
+  usesNomicTaskPrefix,
   type EmbeddingBatchLimits,
 } from "./model";
 import type { EmbeddingClient } from "./types";
@@ -79,9 +85,11 @@ type DocumentRow = {
 /**
  * The string sent to the embedding model for a chunk.
  * The stored passage stays `text`; this prefix is not written to that column.
+ * A Nomic model also receives the `search_document:` task prefix.
  */
 export function embeddingInput(sectionHeading: string, text: string): string {
-  return `${sectionHeading}\n\n${text}`;
+  const body = `${sectionHeading}\n\n${text}`;
+  return usesNomicTaskPrefix() ? `${NOMIC_DOCUMENT_PREFIX}${body}` : body;
 }
 
 export function vectorToFloat32(values: readonly number[]): Buffer {
@@ -219,9 +227,18 @@ export async function embedGuidanceIndex(options: {
     contentHashes,
     indexPath: join(options.dataDir, GUIDANCE_DB_NAME),
     client: options.client ?? createEmbeddingClient(),
-    limits: options.limits,
+    limits: options.limits ?? localBatchLimits(),
     log: options.log,
   });
+}
+
+/** Smaller ONNX batches when the configured model runs on this machine. */
+function localBatchLimits(): EmbeddingBatchLimits | undefined {
+  if (!localEmbeddingModelId(embeddingModelFromEnv())) return undefined;
+  return {
+    maxInputs: LOCAL_EMBEDDING_MAX_INPUTS,
+    maxTokens: LOCAL_EMBEDDING_MAX_TOKENS,
+  };
 }
 
 export async function loadChunkFile(filePath: string): Promise<GuidanceChunk[]> {

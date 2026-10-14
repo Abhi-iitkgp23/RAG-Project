@@ -23,6 +23,7 @@ export type GroundResult = {
 
 type BoundClaim = OutputClaim & {
   source: Source;
+  quote: string;
 };
 
 /**
@@ -53,16 +54,17 @@ export function ground(
       text,
       documentId: chunk.documentId,
       source: sourceFromChunk(chunk),
+      quote: draftClaim.quote,
     });
   }
 
   const scan = scanOutputClaims(bound);
   if (scan.action === "decline") return professionalRefusal();
 
-  const kept = withoutRepeatedClaims(
-    orderClaims(bound.filter((claim) => scan.claims.includes(claim))),
-    (claim) => claim.documentId,
+  const supported = bound.filter(
+    (claim) => scan.claims.includes(claim) && quantitiesInQuote(claim.text, claim.quote),
   );
+  const kept = withoutRepeatedClaims(orderClaims(supported), (claim) => claim.documentId);
   if (kept.length === 0) return coverageRefusal(scope);
 
   return {
@@ -84,13 +86,20 @@ function quoteSupports(quote: string, chunkText: string): boolean {
   return collapseWhitespace(chunkText).includes(collapsed);
 }
 
+/** A digit sequence in the claim must occur in the supporting quote. */
+function quantitiesInQuote(text: string, quote: string): boolean {
+  const collapsedQuote = collapseWhitespace(quote);
+  const quantities = collapseWhitespace(text).match(/\d[\d,]*(?:\.\d+)?/g) ?? [];
+  return quantities.every((quantity) => collapsedQuote.includes(quantity));
+}
+
 function sourceFromChunk(chunk: RetrievedChunk): Source {
   return {
     documentName: chunk.documentName,
     publisher: chunk.publisher,
     year: chunk.year,
     url: chunk.sourceUrl,
-    sectionHeading: chunk.sectionHeading,
+    sectionHeading: chunk.sectionHeading.trim(),
   };
 }
 

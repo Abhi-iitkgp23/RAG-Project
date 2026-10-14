@@ -12,6 +12,7 @@
 # guidance index, conversation store, fetched bodies, eval output
 data/guidance.db
 data/nutrition.db
+data/llm-budget.json
 data/raw/
 data/models/
 evals/runs/

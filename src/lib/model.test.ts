@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { ChatBudget, GPT_OSS_120B_LIMITS, LlmLimitError } from "./llmBudget";
 import type { EmbeddingClient, JsonSchema } from "./types";
 import {
   COMPLETION_TEMPERATURE,
@@ -10,9 +11,15 @@ import {
   EmbeddingDimensionError,
   ModelOutputError,
   STRUCTURED_OUTPUT_ATTEMPTS,
+  RATE_LIMIT_RETRIES,
+  completeStructured,
+  parseGroqDurationMs,
+  rateLimitDisposition,
+  rateLimitWaitMs,
   batchEmbeddingInputs,
   chatModelFromEnv,
   embeddingDimensionsFromEnv,
+  LOCAL_EMBEDDING_MAX_INPUTS,
   localEmbeddingModelId,
   createEmbeddingClient,
   createModelClient,
@@ -178,6 +185,42 @@ describe("embedding client", () => {
     ]);
     expect(result).toEqual(vector(0.25));
   });
+
+  it("adds the nomic search_query prefix and leaves other models unprefixed", async () => {
+    rememberEnv("EMBEDDING_MODEL");
+    const calls: string[][] = [];
+    const client: EmbeddingClient = {
+      async embed(texts) {
+        calls.push([...texts]);
+        return [vector(0.25)];
+      },
+    };
+
+    process.env.EMBEDDING_MODEL = "nomic-embed-text-v1_5";
+    await embedQuery(client, "how long does cooked chicken last");
+    process.env.EMBEDDING_MODEL = "local:nomic-ai/nomic-embed-text-v1.5";
+    await embedQuery(client, "how long does cooked chicken last");
+    process.env.EMBEDDING_MODEL = "text-embedding-3-small";
+    await embedQuery(client, "how long does cooked chicken last");
+
+    expect(calls).toEqual([
+      ["search_query: how long does cooked chicken last"],
+      ["search_query: how long does cooked chicken last"],
+      ["how long does cooked chicken last"],
+    ]);
+  });
+
+  it("splits an on-device batch under the local cap", () => {
+    expect(LOCAL_EMBEDDING_MAX_INPUTS).toBeLessThan(EMBEDDING_MAX_INPUTS);
+    const batches = batchEmbeddingInputs(
+      Array.from({ length: LOCAL_EMBEDDING_MAX_INPUTS + 1 }, () => "oils"),
+      { maxInputs: LOCAL_EMBEDDING_MAX_INPUTS },
+    );
+    expect(batches.map((batch) => batch.length)).toEqual([
+      LOCAL_EMBEDDING_MAX_INPUTS,
+      1,
+    ]);
+  });
 });
 
 const draftSchema: JsonSchema = {
@@ -324,6 +367,7 @@ describe("chat completion client", () => {
         async create(request) {
           calls += 1;
           expect(request.reasoning_effort).toBe("low");
+          expect(request.max_completion_tokens).toBe(2_048);
           if (calls === 1) {
             const error = new Error("Parsing failed");
             Object.assign(error, { code: "output_parse_failed" });
@@ -367,6 +411,200 @@ describe("chat completion client", () => {
       }),
     ).rejects.toThrow("Parsing failed");
     expect(calls).toBe(STRUCTURED_OUTPUT_ATTEMPTS);
+  });
+
+  it("waits out one Groq token window and keeps the next object", async () => {
+    expect(parseGroqDurationMs("31.657s")).toBe(31_657);
+    expect(parseGroqDurationMs("2m3.5s")).toBe(123_500);
+    expect(rateLimitWaitMs(new Error("timeout"))).toBeNull();
+
+    const limited = new Error("Rate limit reached");
+    Object.assign(limited, {
+      status: 429,
+      code: "rate_limit_exceeded",
+      headers: { "x-ratelimit-reset-tokens": "31.657s" },
+    });
+    expect(rateLimitWaitMs(limited)).toBe(32_157);
+
+    let calls = 0;
+    const waits: number[] = [];
+    const response = await completeStructured(
+      {
+        async create() {
+          calls += 1;
+          if (calls === 1) throw limited;
+          return { choices: [{ message: { content: "{}" } }] };
+        },
+      },
+      {
+        model: "openai/gpt-oss-120b",
+        temperature: 0,
+        messages: [],
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: "grounded_draft", strict: true, schema: draftSchema },
+        },
+      },
+      async (ms) => {
+        waits.push(ms);
+      },
+    );
+
+    expect(response.choices[0]?.message.content).toBe("{}");
+    expect(calls).toBe(1 + RATE_LIMIT_RETRIES);
+    expect(waits).toEqual([32_157]);
+  });
+
+  it("stops after one minute-window retry and does not retry a daily cap", async () => {
+    const minute = new Error("Rate limit reached on tokens per minute");
+    Object.assign(minute, { status: 429, code: "rate_limit_exceeded" });
+    expect(rateLimitDisposition(minute)).toBe("minute");
+
+    const daily = new Error(
+      "Rate limit reached on tokens per day (TPD): Limit 200000, Requested 100",
+    );
+    Object.assign(daily, { status: 429, code: "rate_limit_exceeded" });
+    expect(rateLimitDisposition(daily)).toBe("day");
+
+    const oversized = new Error("Limit 8000, Requested 9000");
+    Object.assign(oversized, { status: 429, code: "rate_limit_exceeded" });
+    expect(rateLimitDisposition(oversized)).toBe("too_large");
+
+    await expect(
+      completeStructured(
+        {
+          async create() {
+            throw minute;
+          },
+        },
+        {
+          model: "openai/gpt-oss-120b",
+          temperature: 0,
+          messages: [],
+          response_format: {
+            type: "json_schema",
+            json_schema: { name: "grounded_draft", strict: true, schema: draftSchema },
+          },
+        },
+        async () => {},
+      ),
+    ).rejects.toMatchObject({ reason: "minute" });
+
+    await expect(
+      completeStructured(
+        {
+          async create() {
+            throw daily;
+          },
+        },
+        {
+          model: "openai/gpt-oss-120b",
+          temperature: 0,
+          messages: [],
+          response_format: {
+            type: "json_schema",
+            json_schema: { name: "grounded_draft", strict: true, schema: draftSchema },
+          },
+        },
+        async () => {},
+      ),
+    ).rejects.toMatchObject({ reason: "day" });
+  });
+
+  it("caps gpt-oss output, trims older turns, and skips the provider when the day is spent", async () => {
+    let now = Date.parse("2026-10-15T12:00:00.000Z");
+    const budget = ChatBudget.memory({
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+    });
+    const reservation = await budget.acquire(100);
+    await budget.reject(reservation.id, { daily: true, blockMs: 0 });
+
+    let calls = 0;
+    const client = createModelClient({
+      model: "openai/gpt-oss-120b",
+      budget,
+      completions: {
+        async create() {
+          calls += 1;
+          return { choices: [{ message: { content: "{}" } }] };
+        },
+      },
+    });
+
+    await expect(
+      client.complete({
+        system: "system",
+        messages: [{ role: "user", content: "how long does cooked chicken last" }],
+        schema: draftSchema,
+        schemaName: "grounded_draft",
+      }),
+    ).rejects.toBeInstanceOf(LlmLimitError);
+    expect(calls).toBe(0);
+
+    const open = ChatBudget.memory({
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+    });
+    await open.acquire(7_500);
+    let seen = 0;
+    const waiting = createModelClient({
+      model: "openai/gpt-oss-120b",
+      budget: open,
+      completions: {
+        async create(request) {
+          seen += 1;
+          expect(request.max_completion_tokens).toBe(512);
+          expect(request.messages.some((message) => message.content === "oldest")).toBe(false);
+          expect(request.messages.at(-1)?.content).toBe("latest");
+          return {
+            choices: [{ message: { content: "{}" } }],
+            usage: { total_tokens: 40 },
+          };
+        },
+      },
+    });
+
+    await waiting.complete({
+      system: "system",
+      messages: [
+        { role: "user", content: "oldest" },
+        { role: "user", content: "x".repeat(40_000) },
+        { role: "user", content: "latest" },
+      ],
+      schema: draftSchema,
+      schemaName: "scope_decision",
+    });
+    expect(seen).toBe(1);
+    expect(open.snapshot().minuteTokens).toBe(40);
+    expect(open.snapshot().dayTokens).toBe(7_540);
+  });
+
+  it("does not call the provider when one prompt exceeds the minute token cap", async () => {
+    let calls = 0;
+    const client = createModelClient({
+      model: "openai/gpt-oss-120b",
+      completions: {
+        async create() {
+          calls += 1;
+          return { choices: [{ message: { content: "{}" } }] };
+        },
+      },
+    });
+
+    await expect(
+      client.complete({
+        system: "s".repeat(GPT_OSS_120B_LIMITS.tokensPerMinute * 4),
+        messages: [{ role: "user", content: "question" }],
+        schema: draftSchema,
+        schemaName: "grounded_draft",
+      }),
+    ).rejects.toMatchObject({ reason: "too_large" });
+    expect(calls).toBe(0);
   });
 });
 

@@ -21,3 +21,16 @@ export async function GET(
   }
   return NextResponse.json(conversationResponse(store, conversation));
 }
+
+/** Delete one conversation and its messages. An unknown id is 404. */
+export async function DELETE(
+  _request: Request,
+  context: RouteContext,
+): Promise<NextResponse> {
+  const { id } = await context.params;
+  const store = getConversationStore();
+  if (!store.deleteConversation(id)) {
+    return NextResponse.json({ error: "Unknown conversation" }, { status: 404 });
+  }
+  return new NextResponse(null, { status: 204 });
+}

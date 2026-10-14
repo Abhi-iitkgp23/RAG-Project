@@ -105,5 +105,17 @@ describe("shared contracts", () => {
         },
       }).success,
     ).toBe(false);
+    expect(
+      boundClaimSchema.safeParse({
+        text: "Cooked chicken keeps for 3 to 4 days in the refrigerator.",
+        source: {
+          documentName: "Cold Food Storage Chart",
+          publisher: "FoodSafety.gov (USDA, FDA, and CDC)",
+          year: 2023,
+          url: "https://www.foodsafety.gov/food-safety-charts/cold-food-storage-charts",
+          sectionHeading: "",
+        },
+      }).success,
+    ).toBe(true);
   });
 });

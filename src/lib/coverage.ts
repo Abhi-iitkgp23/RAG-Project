@@ -41,3 +41,16 @@ export function notInCorpusAnswer(
       : [scope];
   return `${NOT_IN_CORPUS_OPENING}${ids.map(coverageLabel).join("; ")}.`;
 }
+
+/**
+ * Documents named by a coverage refusal. A scope decline, a clarification,
+ * or any other answer returns none, so the UI does not claim they were searched.
+ */
+export function documentsNamedInCoverageAnswer(
+  answer: string,
+): CorpusDocumentId[] {
+  if (!answer.startsWith(NOT_IN_CORPUS_OPENING)) return [];
+  return CORPUS.filter((document) =>
+    answer.includes(coverageLabel(document.id)),
+  ).map((document) => document.id);
+}

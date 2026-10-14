@@ -164,6 +164,20 @@ describe("guidance index embeddings", () => {
     expect(calls[0]?.[0]).toBe(
       "Poultry\n\nCooked chicken keeps for 3 to 4 days.",
     );
+    const previousModel = process.env.EMBEDDING_MODEL;
+    process.env.EMBEDDING_MODEL = "nomic-embed-text-v1_5";
+    try {
+      expect(embeddingInput("Poultry", "Cooked chicken keeps for 3 to 4 days.")).toBe(
+        "search_document: Poultry\n\nCooked chicken keeps for 3 to 4 days.",
+      );
+      process.env.EMBEDDING_MODEL = "local:nomic-ai/nomic-embed-text-v1.5";
+      expect(embeddingInput("Poultry", "Cooked chicken keeps for 3 to 4 days.")).toBe(
+        "search_document: Poultry\n\nCooked chicken keeps for 3 to 4 days.",
+      );
+    } finally {
+      if (previousModel === undefined) delete process.env.EMBEDDING_MODEL;
+      else process.env.EMBEDDING_MODEL = previousModel;
+    }
     const stored = readChunk(indexPath, source.id);
     expect(stored.text).toBe(source.text);
     expect(stored.sectionHeading).toBe("Poultry");

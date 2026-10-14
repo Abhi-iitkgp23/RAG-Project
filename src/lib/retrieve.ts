@@ -202,7 +202,7 @@ export function loadGuidanceIndex(indexPath: string): IndexedChunk[] {
 
 /**
  * Load the index once. Later searches score that snapshot and embed only
- * the query string, with no section-heading prefix.
+ * the rewritten question, with no section-heading prefix.
  */
 export function createRetriever(options: {
   indexPath: string;

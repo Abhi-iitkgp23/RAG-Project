@@ -6,6 +6,7 @@ import { createModelClient, ModelOutputError } from "./model";
 import {
   SCOPE_CLASSIFIER_PROMPT,
   SCOPE_SCHEMA_NAME,
+  allowDespiteDecline,
   classifyScope,
   interpretScopeDecision,
   scanOutputClaims,
@@ -264,6 +265,52 @@ describe("scope classifier", () => {
     await expect(classifyScope(client, "hello", [])).rejects.toThrow("timeout");
     await expect(classifyScope(client, "hello", [])).rejects.not.toBeInstanceOf(
       ModelOutputError,
+    );
+  });
+});
+
+describe("allow despite a mislabeled decline", () => {
+  const allowed = [
+    "What should I eat?",
+    "What should I eat daily?",
+    "So what should I eat this week?",
+    "How much water should I drink daily?",
+    "WHAT SHOULD I EAT DAILY?",
+    "  How much water should I drink daily?  ",
+    "What does the Eatwell Guide recommend?",
+    "What are the Indian dietary guidelines?",
+    "Is honey part of a balanced diet?",
+    "How long can cooked rice stay in the fridge?",
+    "How should I store cooked food safely?",
+    "Hey what should I eat on daily basis?",
+    "How many calories are in 100 g of an apple?",
+  ];
+
+  it("lets population diet, fluid, and storage questions through", () => {
+    for (const message of allowed) {
+      expect(allowDespiteDecline(message, "calorie_target"), message).toBe(true);
+      expect(allowDespiteDecline(message, "medical_advice"), message).toBe(true);
+    }
+  });
+
+  it("does not override a real calorie, weight, or medical request", () => {
+    const restricted = [
+      "How many calories should I eat to lose 10 kg?",
+      "How many calories should I eat to lose weight?",
+      "What daily calorie deficit should I run to drop fat?",
+      "I have diabetes. What diet should I follow?",
+      "What should I eat for my diabetes?",
+      "What should I weigh?",
+      "What BMI should I aim for?",
+      "What should I drink for my dehydration?",
+    ];
+    for (const message of restricted) {
+      expect(allowDespiteDecline(message, "calorie_target"), message).toBe(false);
+      expect(allowDespiteDecline(message, "medical_advice"), message).toBe(false);
+      expect(allowDespiteDecline(message, "weight_recommendation"), message).toBe(false);
+    }
+    expect(allowDespiteDecline("How long can cooked rice stay in the fridge?", "unparsed")).toBe(
+      false,
     );
   });
 });

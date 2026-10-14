@@ -4,9 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { POST } from "../app/api/chat/route";
-import { CLARIFICATION_ANSWER } from "./clarify";
+import {
+  CLARIFICATION_ANSWER,
+  GREETING_ANSWER,
+  NONSENSE_ANSWER,
+  PROFANITY_ANSWER,
+  UNRELATED_MATHS_ANSWER,
+} from "./clarify";
 import { notInCorpusAnswer } from "./coverage";
 import { PROFESSIONAL_REFUSAL } from "./decline";
+import { DAILY_LIMIT_MESSAGE, QUESTION_TOO_LONG_MESSAGE, RATE_LIMIT_MESSAGE } from "./copy";
+import { LlmLimitError } from "./llmBudget";
 import { ModelOutputError } from "./model";
 import { GROUNDED_DRAFT_SCHEMA_NAME, PROMPT_VERSION } from "./prompt";
 import { GuidanceIndexError } from "./retrieve";
@@ -275,10 +283,10 @@ describe("POST /api/chat", () => {
       expect(status).toBe(200);
       expect(answerOf(json)).toMatchObject({
         role: "assistant",
-        answer: notInCorpusAnswer("all"),
+        answer: UNRELATED_MATHS_ANSWER,
         claims: [],
         declined: false,
-        coverage: "not_in_corpus",
+        coverage: "clarify",
       });
       const stored = store.listMessages(String(json.conversationId));
       expect(stored.map((row) => row.role)).toEqual(["user", "assistant"]);
@@ -334,6 +342,12 @@ describe("POST /api/chat", () => {
     expect(dietRetrievalQuery("How long can cooked chicken stay in the fridge?", "chicken fridge")).toBe(
       "chicken fridge",
     );
+    expect(
+      dietRetrievalQuery(
+        "What is the published guidance on cooking oil and fats?",
+        "published guidance on cooking oil and fats",
+      ),
+    ).toContain("unsaturated oils and spreads");
   });
 
   it("still searches a follow-up that names a topic or points at an earlier turn", async () => {
@@ -433,6 +447,81 @@ describe("POST /api/chat", () => {
     expect(retrieved).toHaveLength(0);
     const messages = store.listMessages(String(json.conversationId));
     expect(messages.map((message) => message.role)).toEqual(["user"]);
+  });
+
+  it("returns 429 when the model is past the daily or per-minute limit", async () => {
+    const store = await tempStore();
+    wire({
+      model: scriptedModel(() => {
+        throw new LlmLimitError("day");
+      }),
+    });
+
+    const daily = await post({
+      message: "How long can cooked chicken stay in the fridge?",
+    });
+    expect(daily.status).toBe(429);
+    expect(daily.json.error).toBe(DAILY_LIMIT_MESSAGE);
+    expect(store.listMessages(String(daily.json.conversationId)).map((message) => message.role)).toEqual([
+      "user",
+    ]);
+
+    wire({
+      model: scriptedModel(() => {
+        throw new LlmLimitError("minute");
+      }),
+    });
+    const minute = await post({
+      message: "How long can cooked chicken stay in the fridge?",
+    });
+    expect(minute.status).toBe(429);
+    expect(minute.json.error).toBe(RATE_LIMIT_MESSAGE);
+
+    wire({
+      model: scriptedModel(() => {
+        throw new LlmLimitError("too_large");
+      }),
+    });
+    const oversized = await post({
+      message: "How long can cooked chicken stay in the fridge?",
+    });
+    expect(oversized.status).toBe(429);
+    expect(oversized.json.error).toBe(QUESTION_TOO_LONG_MESSAGE);
+  });
+
+  it("drops older turns and extra passages so a gpt-oss draft fits the minute token cap", async () => {
+    const previous = process.env.OPENAI_MODEL;
+    process.env.OPENAI_MODEL = "openai/gpt-oss-120b";
+    try {
+      const store = await tempStore();
+      const conversation = store.createConversation();
+      store.appendUserMessage(conversation.id, `OLDEST${"x".repeat(20_000)}`);
+      const client = allowingModel(validDraft());
+      wire({
+        model: client,
+        chunks: [
+          chunk({ id: "cold-storage-2023:0", text: `KEEP${"c".repeat(9_000)}`, score: 0.9 }),
+          chunk({ id: "cold-storage-2023:1", text: `DROP-A${"c".repeat(9_000)}`, score: 0.5 }),
+          chunk({ id: "cold-storage-2023:2", text: `DROP-B${"c".repeat(9_000)}`, score: 0.4 }),
+        ],
+      });
+
+      const { status } = await post({
+        conversationId: conversation.id,
+        message: "How long can cooked chicken stay in the fridge?",
+      });
+
+      expect(status).toBe(200);
+      const draft = client.calls.find((call) => call.schemaName === GROUNDED_DRAFT_SCHEMA_NAME);
+      const payload = draft?.messages.map((message) => message.content).join("\n") ?? "";
+      expect(payload).not.toContain("OLDEST");
+      expect(payload).toContain("id: cold-storage-2023:0");
+      expect(payload).not.toContain("id: cold-storage-2023:1");
+      expect(payload).not.toContain("id: cold-storage-2023:2");
+    } finally {
+      if (previous === undefined) delete process.env.OPENAI_MODEL;
+      else process.env.OPENAI_MODEL = previous;
+    }
   });
 
   it("retrieves again for a follow-up and does not treat the previous answer as a chunk", async () => {
@@ -761,5 +850,160 @@ describe("POST /api/chat", () => {
       promptVersion: PROMPT_VERSION,
       coverage: "answered",
     });
+  });
+
+  it("answers greetings, keywords, gibberish, profanity, and maths without retrieval", async () => {
+    const store = await tempStore();
+    const client = allowingModel(validDraft());
+    const retrieved = wire({
+      model: client,
+      retrieveError: new GuidanceIndexError("/tmp/guidance.db", "guidance index is missing"),
+    });
+
+    const cases: Array<[string, string]> = [
+      ["Hi", GREETING_ANSWER],
+      ["Hey ", GREETING_ANSWER],
+      [" hello ", GREETING_ANSWER],
+      ["HEY", GREETING_ANSWER],
+      ["hney", GREETING_ANSWER],
+      [
+        "water",
+        "What would you like to know about water—daily intake, hydration, or something else?",
+      ],
+      ["Honey", "Are you asking about honey's role in dietary guidance or how to store it?"],
+      [
+        "rice",
+        "Would you like to know about rice as part of a balanced diet or how to store cooked rice safely?",
+      ],
+      ["GAVSV", NONSENSE_ANSWER],
+      ["asdfgh", NONSENSE_ANSWER],
+      ["bsdk", PROFANITY_ANSWER],
+      ["6+6", UNRELATED_MATHS_ANSWER],
+    ];
+
+    for (const [message, answer] of cases) {
+      const { status, json } = await post({ message });
+      expect(status, message).toBe(200);
+      expect(answerOf(json), message).toMatchObject({
+        answer,
+        claims: [],
+        declined: false,
+        coverage: "clarify",
+      });
+      expect(answerOf(json).answer, message).not.toBe(PROFESSIONAL_REFUSAL);
+      const rows = store.listMessages(String(json.conversationId));
+      expect(rows[0]?.content, message).toBe(message);
+    }
+
+    expect(client.calls).toHaveLength(0);
+    expect(retrieved).toHaveLength(0);
+  });
+
+  it("retrieves valid dietary questions even when the scope model declines them", async () => {
+    await tempStore();
+    const client = scriptedModel((input) => {
+      if (input.schemaName === SCOPE_SCHEMA_NAME) {
+        return { decision: "decline", category: "medical_advice" };
+      }
+      if (input.schemaName === REWRITE_SCHEMA_NAME) {
+        return { query: input.messages.at(-1)?.content ?? "" };
+      }
+      return validDraft();
+    });
+    const retrieved = wire({ model: client });
+
+    const questions = [
+      "What should I eat?",
+      "What should I eat daily?",
+      "So what should I eat this week?",
+      "How much water should I drink daily?",
+      "What does the Eatwell Guide recommend?",
+      "What are the Indian dietary guidelines?",
+      "Is honey part of a balanced diet?",
+      "How long can cooked rice stay in the fridge?",
+      "How should I store cooked food safely?",
+      "Hey what should I eat on daily basis?",
+      "  HOW MUCH WATER SHOULD I DRINK DAILY?  ",
+    ];
+
+    for (const message of questions) {
+      const { status, json } = await post({ message });
+      expect(status, message).toBe(200);
+      expect(answerOf(json), message).toMatchObject({
+        coverage: "answered",
+        declined: false,
+      });
+      expect(answerOf(json).answer, message).not.toBe(PROFESSIONAL_REFUSAL);
+      expect((answerOf(json).claims as unknown[]).length, message).toBeGreaterThan(0);
+    }
+
+    expect(retrieved).toHaveLength(questions.length);
+    expect(client.calls.some((call) => call.schemaName === GROUNDED_DRAFT_SCHEMA_NAME)).toBe(
+      true,
+    );
+  });
+
+  it("keeps the professional refusal for a personal calorie target or a named condition", async () => {
+    await tempStore();
+    const client = scriptedModel((input) => {
+      const current = input.messages.at(-1)?.content ?? "";
+      if (current.toLowerCase().includes("weigh") || current.toLowerCase().includes("bmi")) {
+        return { decision: "decline", category: "weight_recommendation" };
+      }
+      if (current.toLowerCase().includes("diabetes")) {
+        return { decision: "decline", category: "medical_advice" };
+      }
+      return { decision: "decline", category: "calorie_target" };
+    });
+    const retrieved = wire({ model: client });
+
+    for (const message of [
+      "How many calories should I eat to lose 10 kg?",
+      "I have diabetes. What diet should I follow?",
+      "What should I eat for my diabetes?",
+      "What should I weigh?",
+    ]) {
+      const { status, json } = await post({ message });
+      expect(status, message).toBe(200);
+      expect(answerOf(json), message).toMatchObject({
+        answer: PROFESSIONAL_REFUSAL,
+        claims: [],
+        declined: true,
+        coverage: "declined",
+      });
+    }
+
+    expect(retrieved).toHaveLength(0);
+    expect(client.calls.every((call) => call.schemaName === SCOPE_SCHEMA_NAME)).toBe(true);
+  });
+
+  it("does not ship a claim whose quote is absent from the retrieved passage", async () => {
+    await tempStore();
+    const invented = "Honey is required at every meal as part of a balanced diet.";
+    const client = allowingModel({
+      covered: true,
+      claims: [
+        {
+          text: invented,
+          quote: "this sentence is not in the retrieved passage",
+          chunkId: "cold-storage-2023:12",
+        },
+      ],
+    });
+    const retrieved = wire({ model: client });
+
+    const { status, json } = await post({
+      message: "Is honey part of a balanced diet?",
+    });
+
+    expect(status).toBe(200);
+    expect(retrieved).toHaveLength(1);
+    expect(answerOf(json)).toMatchObject({
+      coverage: "not_in_corpus",
+      claims: [],
+      declined: false,
+      answer: notInCorpusAnswer("all"),
+    });
+    expect(JSON.stringify(answerOf(json))).not.toContain(invented);
   });
 });

@@ -44,13 +44,13 @@ The Eatwell plate drawing contributes only its text layer. Prose pages and the f
 
 | Choice | Value |
 | --- | --- |
-| Embedding model | On-device `onnx-community/all-MiniLM-L6-v2-ONNX` (384 dimensions), set as `local:onnx-community/all-MiniLM-L6-v2-ONNX` with `EMBEDDING_DIMENSIONS=384`. Groq does not serve an embedding model for this key. Unset, the default stays `text-embedding-3-small` at 1,536. The request does not set `dimensions` |
+| Embedding model | On-device `nomic-ai/nomic-embed-text-v1.5` (768 dimensions, q8), set as `local:nomic-ai/nomic-embed-text-v1.5` with `EMBEDDING_DIMENSIONS=768`. Chunks are prefixed `search_document: `; questions are prefixed `search_query: `. Groq does not serve an embedding model for this key, so the Railway process embeds. Unset, the default stays `text-embedding-3-small` at 1,536. The request does not set `dimensions` |
 | Index | Flat exact cosine over float32 vectors in SQLite (`guidance.db`), loaded into memory. No approximate index |
 | `k` | 6 |
 | `MIN_SCORE` | 0.30. Hits below this are not evidence |
 | Filter | Full corpus, or one document when the raw user message names exactly one document |
 
-A chunk is embedded as its section heading, a blank line, and then the chunk text. The stored passage stays `text`, so a quote has to match that column. A query is embedded as the question alone.
+A chunk is embedded as its section heading, a blank line, and then the chunk text. The Nomic model prefixes that string with `search_document: `. The stored passage stays `text`, so a quote has to match that column. A query is prefixed `search_query: ` and has no heading. Without a Nomic model, the query is the question alone.
 
 ## Answer rule
 
@@ -89,10 +89,12 @@ npm run dev
 npm run eval     # posts the frozen set to EVAL_BASE_URL or http://localhost:3000
 ```
 
-`OPENAI_API_KEY` is required. `OPENAI_MODEL` is optional. `EMBEDDING_MODEL` defaults to `text-embedding-3-small` (1,536 dimensions). This repo's `.env` points chat at Groq, which has no embedding model, so embeddings run on device: `EMBEDDING_MODEL=local:onnx-community/all-MiniLM-L6-v2-ONNX` and `EMBEDDING_DIMENSIONS=384`. `DATA_DIR` defaults to `./data` and holds both `guidance.db` and `nutrition.db`. `OPENAI_BASE_URL` is optional when the provider is an OpenAI-compatible host. Chat uses that host. Embeddings use it only when `EMBEDDING_MODEL` is not a `local:` id. The key is read on the server. The browser calls only this app.
+`OPENAI_API_KEY` is required. `OPENAI_MODEL` is optional. `EMBEDDING_MODEL` defaults to `text-embedding-3-small` (1,536 dimensions). This repo's `.env` points chat at Groq, which has no embedding model, so embeddings run in the app process: `EMBEDDING_MODEL=local:nomic-ai/nomic-embed-text-v1.5` and `EMBEDDING_DIMENSIONS=768`. On Railway that process is the server, so the laptop can be off. `DATA_DIR` defaults to `./data` and holds `guidance.db`, `nutrition.db`, and the ONNX weights under `models/`. `OPENAI_BASE_URL` is optional when the provider is an OpenAI-compatible host. Chat uses that host. Embeddings use it only when `EMBEDDING_MODEL` is not a `local:` id. The key is read on the server. The browser calls only this app.
 
 `docs/failure-log.md` is filled from `evals/runs/<timestamp>/` after `npm run eval`. A prompt edit, a chunking change, or a change to `k` or `MIN_SCORE` is unfinished until that command has been run again.
 
 ## Deploy
 
-Railway. Mount a persistent disk and set `DATA_DIR` to that mount so `guidance.db` and `nutrition.db` survive a restart. The release command is `sh scripts/release.sh`: it runs `npm run ingest` when `guidance.db` is absent or older than `src/lib/corpus.ts`, then `next start`. A failed ingest does not replace a good index, and the process exits before `next start`. A missing `OPENAI_API_KEY` fails the release the same way. No environment variable is exposed to the browser.
+Railway. The steps, variables, volume layout, and the checks to run on the public URL are in [docs/deployment.md](docs/deployment.md).
+
+Mount a persistent disk and set `DATA_DIR` to that mount so `guidance.db` and `nutrition.db` survive a restart. The release command is `sh scripts/release.sh`: it runs `npm run ingest` when `guidance.db` is absent or older than `src/lib/corpus.ts`, then `next start`. A failed ingest does not replace a good index, and the process exits before `next start`. A missing `OPENAI_API_KEY` fails the release the same way. No environment variable is exposed to the browser. On a fresh image, `src/lib/corpus.ts` is newer than the volume's index, so each deploy re-ingests until that check compares content instead of mtimes.

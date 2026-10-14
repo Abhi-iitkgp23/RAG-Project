@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { notInCorpusAnswer } from "./coverage";
+import { documentsNamedInCoverageAnswer, notInCorpusAnswer } from "./coverage";
 import { PROFESSIONAL_REFUSAL } from "./decline";
 
 const FULL_CORPUS =
@@ -37,5 +37,34 @@ describe("refusal copy", () => {
       "The guidance I searched does not cover that. I looked in: How to chill, freeze and defrost food safely (Food Standards Agency, 2017).",
     );
     expect(notInCorpusAnswer("fsa-chill-2017")).not.toContain("GOV.UK");
+  });
+});
+
+describe("documents named in a coverage refusal", () => {
+  it("lists every document the full-corpus sentence says was searched", () => {
+    expect(documentsNamedInCoverageAnswer(notInCorpusAnswer("all"))).toEqual([
+      "dgi-2024",
+      "eatwell-2018",
+      "cold-storage-2023",
+      "fsa-chill-2017",
+    ]);
+  });
+
+  it("lists only the document a filtered search names", () => {
+    expect(documentsNamedInCoverageAnswer(notInCorpusAnswer("eatwell-2018"))).toEqual([
+      "eatwell-2018",
+    ]);
+    expect(documentsNamedInCoverageAnswer(notInCorpusAnswer("dgi-2024"))).toEqual([
+      "dgi-2024",
+    ]);
+  });
+
+  it("does not treat a decline or another answer as a search", () => {
+    expect(documentsNamedInCoverageAnswer(PROFESSIONAL_REFUSAL)).toEqual([]);
+    expect(
+      documentsNamedInCoverageAnswer(
+        "Dietary Guidelines for Indians recommend a varied diet.",
+      ),
+    ).toEqual([]);
   });
 });

@@ -1,4 +1,15 @@
+import { join } from "node:path";
 import OpenAI from "openai";
+import {
+  ChatBudget,
+  completionTokenReserve,
+  estimateRequestTokens,
+  GPT_OSS_120B_LIMITS,
+  LlmLimitError,
+  trimMessagesToLimit,
+  usesGptOss120bLimits,
+} from "./llmBudget";
+import { dataDirectory } from "./store";
 import type { EmbeddingClient, JsonSchema, ModelClient } from "./types";
 
 /** Default from `EMBEDDING_MODEL` when the variable is unset or blank. */
@@ -15,6 +26,15 @@ export const EMBEDDING_MAX_INPUTS = 2_048;
 
 /** One embeddings request accepts at most this many tokens, summed. */
 export const EMBEDDING_MAX_TOKENS = 300_000;
+
+/**
+ * On-device batches stay small. One ONNX call padded to the longest
+ * chunk in the batch has to fit in the server that answers questions.
+ */
+export const LOCAL_EMBEDDING_MAX_INPUTS = 8;
+
+/** Token cap for one on-device batch, using the same four-characters estimate. */
+export const LOCAL_EMBEDDING_MAX_TOKENS = 8_192;
 
 export class EmbeddingDimensionError extends Error {
   readonly length: number;
@@ -64,6 +84,22 @@ export function localEmbeddingModelId(model: string): string | null {
   if (!model.startsWith(LOCAL_EMBEDDING_PREFIX)) return null;
   const id = model.slice(LOCAL_EMBEDDING_PREFIX.length).trim();
   return id === "" ? null : id;
+}
+
+/**
+ * Nomic embed models score retrieval only when the input names the task.
+ * The host does not add this prefix, including a `local:` model.
+ */
+export const NOMIC_DOCUMENT_PREFIX = "search_document: ";
+export const NOMIC_QUERY_PREFIX = "search_query: ";
+
+/**
+ * True for Nomic embed ids. A `local:` id is checked after the prefix,
+ * so `local:nomic-ai/nomic-embed-text-v1.5` still gets the task string.
+ */
+export function usesNomicTaskPrefix(model = embeddingModelFromEnv()): boolean {
+  const id = localEmbeddingModelId(model) ?? model;
+  return id.includes("nomic-embed-text");
 }
 
 /**
@@ -132,14 +168,16 @@ export function createEmbeddingClient(options?: {
     return {
       async embed(texts: string[]): Promise<number[][]> {
         if (texts.length === 0) return [];
-        const batches = batchEmbeddingInputs(texts);
-        if (batches.length !== 1) {
-          throw new Error(
-            `embedding request has ${texts.length} inputs; the maximum is ${EMBEDDING_MAX_INPUTS} inputs and ${EMBEDDING_MAX_TOKENS} tokens`,
-          );
-        }
+        const batches = batchEmbeddingInputs(texts, {
+          maxInputs: LOCAL_EMBEDDING_MAX_INPUTS,
+          maxTokens: LOCAL_EMBEDDING_MAX_TOKENS,
+        });
         const { embedWithLocalModel } = await import("./localEmbed");
-        return embedWithLocalModel(localId, texts);
+        const vectors: number[][] = [];
+        for (const batch of batches) {
+          vectors.push(...(await embedWithLocalModel(localId, batch)));
+        }
+        return vectors;
       },
     };
   }
@@ -165,12 +203,16 @@ export function createEmbeddingClient(options?: {
   };
 }
 
-/** Embed one rewritten question, with no section-heading prefix. */
+/**
+ * Embed one rewritten question, with no section-heading prefix.
+ * A Nomic model also receives the `search_query:` task prefix.
+ */
 export async function embedQuery(
   client: EmbeddingClient,
   query: string,
 ): Promise<number[]> {
-  const vectors = await client.embed([query]);
+  const input = usesNomicTaskPrefix() ? `${NOMIC_QUERY_PREFIX}${query}` : query;
+  const vectors = await client.embed([input]);
   if (vectors.length !== 1) {
     throw new Error(`query embedding returned ${vectors.length} vectors`);
   }
@@ -222,6 +264,15 @@ type ChatMessage = {
 /** Attempts for one structured call. Groq sometimes returns `output_parse_failed` with an empty body. */
 export const STRUCTURED_OUTPUT_ATTEMPTS = 3;
 
+/**
+ * One extra try after HTTP 429. Groq's short retry fires in about 2 seconds,
+ * while the token window on this tier resets in about 30.
+ */
+export const RATE_LIMIT_RETRIES = 1;
+
+/** Do not hold a chat turn open longer than this for a single 429. */
+export const MAX_RATE_LIMIT_WAIT_MS = 40_000;
+
 type ChatCompletionRequest = {
   model: string;
   temperature: number;
@@ -235,12 +286,14 @@ type ChatCompletionRequest = {
     };
   };
   reasoning_effort?: "low";
+  max_completion_tokens?: number;
 };
 
 type ChatCompletionResponse = {
   choices: Array<{
     message: { content: string | null };
   }>;
+  usage?: { total_tokens?: number };
 };
 
 type ChatCompletionsApi = {
@@ -263,9 +316,18 @@ export function chatModelFromEnv(
 export function createModelClient(options?: {
   model?: string;
   completions?: ChatCompletionsApi;
+  budget?: ChatBudget | null;
 }): ModelClient {
   const model = options?.model ?? chatModelFromEnv();
+  const limited = usesGptOss120bLimits(model);
+  const budget =
+    options?.budget !== undefined
+      ? options.budget
+      : options?.completions
+        ? null
+        : sharedBudget(model);
   let completions = options?.completions;
+  if (completions && budget) completions = budgetedCompletions(completions, budget);
 
   return {
     async complete(input) {
@@ -274,14 +336,27 @@ export function createModelClient(options?: {
         throw new Error("schema name is required");
       }
 
-      completions ??= openAiCompletions();
+      const messages = limited
+        ? trimMessagesToLimit(
+            [{ role: "system" as const, content: input.system }, ...input.messages],
+            input.schema,
+            schemaName,
+          )
+        : [{ role: "system" as const, content: input.system }, ...input.messages];
+      const reserve = limited ? completionTokenReserve(schemaName) : undefined;
+      if (
+        reserve !== undefined &&
+        estimateRequestTokens(messages, input.schema, reserve) >
+          GPT_OSS_120B_LIMITS.tokensPerMinute
+      ) {
+        throw new LlmLimitError("too_large");
+      }
+
+      completions ??= openAiCompletions(budget);
       const response = await completeStructured(completions, {
         model,
         temperature: COMPLETION_TEMPERATURE,
-        messages: [
-          { role: "system", content: input.system },
-          ...input.messages,
-        ],
+        messages,
         response_format: {
           type: "json_schema",
           json_schema: {
@@ -291,11 +366,21 @@ export function createModelClient(options?: {
           },
         },
         ...reasoningEffortFor(model),
+        ...(reserve !== undefined ? { max_completion_tokens: reserve } : {}),
       });
 
       return parseModelObject(response.choices[0]?.message.content);
     },
   };
+}
+
+let persistentBudget: ChatBudget | undefined;
+
+/** One ledger per process, stored under `DATA_DIR`, so restarts keep the daily spend. */
+function sharedBudget(model: string): ChatBudget | null {
+  if (!usesGptOss120bLimits(model)) return null;
+  persistentBudget ??= ChatBudget.open(join(dataDirectory(), "llm-budget.json"));
+  return persistentBudget;
 }
 
 /**
@@ -310,29 +395,120 @@ export function reasoningEffortFor(model: string): { reasoning_effort: "low" } |
 /**
  * Groq's grammar check fails closed with HTTP 400 and no content. A later
  * attempt often returns the object. A timeout or a 5xx is not retried.
+ * A minute-window 429 waits once, then tries the same body again. A second
+ * minute 429, a daily cap, or a request larger than the minute token cap
+ * throws `LlmLimitError`.
  */
 export async function completeStructured(
   completions: ChatCompletionsApi,
   body: ChatCompletionRequest,
+  sleep: (ms: number) => Promise<void> = delay,
 ): Promise<ChatCompletionResponse> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= STRUCTURED_OUTPUT_ATTEMPTS; attempt += 1) {
+  let parseAttempts = 0;
+  let rateLimitWaits = 0;
+  while (true) {
     try {
       return await completions.create(body);
     } catch (error) {
-      lastError = error;
-      if (!isStructuredOutputParseError(error) || attempt === STRUCTURED_OUTPUT_ATTEMPTS) {
+      const waitMs = rateLimitWaitMs(error);
+      if (waitMs !== null) {
+        const disposition = rateLimitDisposition(error);
+        if (disposition === "day" || disposition === "too_large") {
+          throw new LlmLimitError(disposition);
+        }
+        if (rateLimitWaits < RATE_LIMIT_RETRIES) {
+          rateLimitWaits += 1;
+          await sleep(waitMs);
+          continue;
+        }
+        throw new LlmLimitError("minute");
+      }
+      parseAttempts += 1;
+      if (!isStructuredOutputParseError(error) || parseAttempts >= STRUCTURED_OUTPUT_ATTEMPTS) {
         throw error;
       }
     }
   }
-  throw lastError;
+}
+
+/**
+ * A 429 that waiting will not clear: the UTC day is already full, or this
+ * one request is larger than the minute token cap.
+ */
+export function rateLimitDisposition(error: unknown): "day" | "too_large" | "minute" | null {
+  if (rateLimitWaitMs(error) === null) return null;
+  const message = errorMessage(error);
+  if (/\bper day\b|\bTPD\b|\bRPD\b/i.test(message)) return "day";
+  const requested = /Requested\s+(\d+)/i.exec(message);
+  const limit = /Limit\s+(\d+)/i.exec(message);
+  if (requested && limit && Number(requested[1]) > Number(limit[1])) return "too_large";
+  return "minute";
+}
+
+/** Milliseconds to wait for a Groq token window, or null when this is not a 429. */
+export function rateLimitWaitMs(error: unknown): number | null {
+  const limited = errorCode(error) === "rate_limit_exceeded" || httpStatus(error) === 429;
+  if (!limited) return null;
+  const reset = headerValue(error, "x-ratelimit-reset-tokens");
+  const fromReset = reset ? parseGroqDurationMs(reset) : null;
+  if (fromReset !== null) return Math.min(fromReset + 500, MAX_RATE_LIMIT_WAIT_MS);
+  const retryAfter = headerValue(error, "retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(Math.round(seconds * 1000) + 500, MAX_RATE_LIMIT_WAIT_MS);
+    }
+  }
+  return 20_000;
+}
+
+/** Groq sends this header as `31.657s` or `2m3.5s`. */
+export function parseGroqDurationMs(value: string): number | null {
+  const match = /^(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/.exec(value.trim());
+  if (!match || (match[1] === undefined && match[2] === undefined)) return null;
+  const minutes = match[1] ? Number(match[1]) : 0;
+  const seconds = match[2] ? Number(match[2]) : 0;
+  if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) return null;
+  return Math.round((minutes * 60 + seconds) * 1000);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function httpStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object" || !("status" in error)) return undefined;
+  return typeof error.status === "number" ? error.status : undefined;
+}
+
+function headerValue(error: unknown, name: string): string | undefined {
+  if (!error || typeof error !== "object" || !("headers" in error)) return undefined;
+  const headers = error.headers;
+  if (!headers || typeof headers !== "object") return undefined;
+  if ("get" in headers && typeof headers.get === "function") {
+    const value = headers.get(name);
+    return typeof value === "string" ? value : undefined;
+  }
+  const record = headers as Record<string, unknown>;
+  const value = record[name] ?? record[name.toLowerCase()];
+  return typeof value === "string" ? value : undefined;
 }
 
 /** Provider rejected the generation because it was not the schema. */
 export function isStructuredOutputParseError(error: unknown): boolean {
   const code = errorCode(error);
   return code === "output_parse_failed" || code === "json_validate_failed";
+}
+
+function errorMessage(error: unknown): string {
+  if (!error || typeof error !== "object") return "";
+  const parts: string[] = [];
+  if ("message" in error && typeof error.message === "string") parts.push(error.message);
+  if ("error" in error && error.error && typeof error.error === "object") {
+    const nested = error.error;
+    if ("message" in nested && typeof nested.message === "string") parts.push(nested.message);
+  }
+  return parts.join(" ");
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -345,9 +521,9 @@ function errorCode(error: unknown): string | undefined {
   return undefined;
 }
 
-function openAiCompletions(): ChatCompletionsApi {
-  const openai = new OpenAI();
-  return {
+function openAiCompletions(budget: ChatBudget | null): ChatCompletionsApi {
+  const openai = new OpenAI({ maxRetries: 0 });
+  const api: ChatCompletionsApi = {
     async create(body) {
       const response = await openai.chat.completions.create({
         model: body.model,
@@ -355,6 +531,9 @@ function openAiCompletions(): ChatCompletionsApi {
         messages: body.messages,
         response_format: body.response_format,
         ...(body.reasoning_effort ? { reasoning_effort: body.reasoning_effort } : {}),
+        ...(body.max_completion_tokens
+          ? { max_completion_tokens: body.max_completion_tokens }
+          : {}),
       });
       return {
         choices: response.choices.map((choice) => ({
@@ -365,7 +544,49 @@ function openAiCompletions(): ChatCompletionsApi {
                 : null,
           },
         })),
+        usage: response.usage
+          ? { total_tokens: response.usage.total_tokens }
+          : undefined,
       };
+    },
+  };
+  return budget ? budgetedCompletions(api, budget) : api;
+}
+
+/**
+ * Reserve gpt-oss-120b capacity before the HTTP call.
+ * A minute limit pauses. A daily limit or an oversized request fails closed.
+ */
+function budgetedCompletions(inner: ChatCompletionsApi, budget: ChatBudget): ChatCompletionsApi {
+  return {
+    async create(body) {
+      const reserve =
+        body.max_completion_tokens ??
+        completionTokenReserve(body.response_format.json_schema.name);
+      const tokens = estimateRequestTokens(
+        body.messages,
+        body.response_format.json_schema.schema,
+        reserve,
+      );
+      const reservation = await budget.acquire(tokens);
+      try {
+        const response = await inner.create(body);
+        await budget.reconcile(reservation.id, response.usage?.total_tokens);
+        return response;
+      } catch (error) {
+        const kind = rateLimitDisposition(error);
+        if (kind === "day" || kind === "too_large") {
+          await budget.reject(reservation.id, { daily: kind === "day", blockMs: 0 });
+          throw new LlmLimitError(kind);
+        }
+        if (kind === "minute") {
+          await budget.reject(reservation.id, {
+            daily: false,
+            blockMs: rateLimitWaitMs(error) ?? 20_000,
+          });
+        }
+        throw error;
+      }
     },
   };
 }

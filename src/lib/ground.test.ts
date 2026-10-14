@@ -176,17 +176,40 @@ describe("citation binding", () => {
     expect(short.coverage).toBe("not_in_corpus");
     expect(short.claims).toEqual([]);
 
+    const exactText = "Cooked chicken keeps in the refrigerator.";
     const exact = ground(
       {
         covered: true,
-        claims: [draftClaim(CHICKEN, `Cooked\n\nchicken   keeps`, retrieved.id)],
+        claims: [draftClaim(exactText, `Cooked\n\nchicken   keeps`, retrieved.id)],
       },
       [retrieved],
       "all",
     );
     expect(collapseWhitespace("Cooked\n\nchicken   keeps")).toBe(QUOTE_20);
     expect(exact.coverage).toBe("answered");
-    expect(exact.claims.map((claim) => claim.text)).toEqual([CHICKEN]);
+    expect(exact.claims.map((claim) => claim.text)).toEqual([exactText]);
+  });
+
+  it("drops a claim whose quantity is not in the quote", () => {
+    const retrieved = chunk("cold-storage-2023:4", CHICKEN);
+    const result = ground(
+      {
+        covered: true,
+        claims: [
+          draftClaim(
+            "Cooked chicken keeps for 9 days in the refrigerator.",
+            QUOTE_20,
+            retrieved.id,
+          ),
+        ],
+      },
+      [retrieved],
+      "all",
+    );
+
+    expect(result.coverage).toBe("not_in_corpus");
+    expect(result.claims).toEqual([]);
+    expect(result.answer).not.toContain("9");
   });
 
   it("drops a chunkId that was not in this retrieval", () => {
@@ -332,7 +355,7 @@ describe("answer assembly", () => {
     );
 
     expect(result.coverage).toBe("answered");
-    expect(result.answer).toBe(`${fats} ${third}`);
+    expect(result.answer).toBe(`${fats}\n\n${third}`);
     expect(result.claims.map((claim) => claim.text)).toEqual([fats, third]);
   });
 
@@ -356,7 +379,7 @@ describe("answer assembly", () => {
       "all",
     );
 
-    expect(result.answer).toBe(`${third} ${CHICKEN} ${second}`);
+    expect(result.answer).toBe(`${third}\n\n${CHICKEN}\n\n${second}`);
     expect(result.answer).not.toContain("**");
     expect(result.answer).not.toContain(retrieved.documentName);
   });
@@ -383,10 +406,10 @@ describe("answer assembly", () => {
 
     expect(result.answer).toBe(
       [
-        `**${dgi.documentName}** (${dgi.publisher}, ${dgi.year}): ${fats}`,
-        `**${eatwell.documentName}** (${eatwell.publisher}, ${eatwell.year}): ${oils}`,
-        `**${storage.documentName}** (${storage.publisher}, ${storage.year}): ${CHICKEN}`,
-        `**${fsa.documentName}** (${fsa.publisher}, ${fsa.year}): ${defrost} ${chill}`,
+        `**${dgi.documentName}** (${dgi.publisher}, ${dgi.year})\n\n${fats}`,
+        `**${eatwell.documentName}** (${eatwell.publisher}, ${eatwell.year})\n\n${oils}`,
+        `**${storage.documentName}** (${storage.publisher}, ${storage.year})\n\n${CHICKEN}`,
+        `**${fsa.documentName}** (${fsa.publisher}, ${fsa.year})\n\n${defrost}\n\n${chill}`,
       ].join("\n\n"),
     );
     expect(result.answer).not.toMatch(
@@ -487,8 +510,8 @@ describe("answer assembly", () => {
     expect(result.claims).toHaveLength(2);
     expect(result.answer).toBe(
       [
-        `**${storage.documentName}** (${storage.publisher}, ${storage.year}): ${sentence}`,
-        `**${fsa.documentName}** (${fsa.publisher}, ${fsa.year}): ${sentence}`,
+        `**${storage.documentName}** (${storage.publisher}, ${storage.year})\n\n${sentence}`,
+        `**${fsa.documentName}** (${fsa.publisher}, ${fsa.year})\n\n${sentence}`,
       ].join("\n\n"),
     );
     expect(answerFromClaims(result.claims)).toBe(result.answer);

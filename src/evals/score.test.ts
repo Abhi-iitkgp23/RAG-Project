@@ -73,7 +73,12 @@ describe("frozen question scoring", () => {
   it("passes G3 only when both dietary blocks are present and unranked", () => {
     const dgi = document("dgi-2024");
     const eatwell = document("eatwell-2018");
-    const answer = `**${dgi.name}** (${dgi.publisher}, ${dgi.year}): Limit visible oils.\n\n**${eatwell.name}** (${eatwell.publisher}, ${eatwell.year}): Choose unsaturated oils.`;
+    const answer = [
+      `**${dgi.name}** (${dgi.publisher}, ${dgi.year})`,
+      "Limit visible oils.",
+      `**${eatwell.name}** (${eatwell.publisher}, ${eatwell.year})`,
+      "Choose unsaturated oils.",
+    ].join("\n\n");
     expect(
       scoreItem("G3", 200, envelope({
         coverage: "answered",

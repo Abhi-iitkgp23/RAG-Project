@@ -8,7 +8,11 @@ function extractor(modelId: string): Promise<FeatureExtractionPipeline> {
   env.cacheDir = join(dataDirectory(), "models");
   let pending = loaded.get(modelId);
   if (!pending) {
-    pending = pipeline("feature-extraction", modelId);
+    // q8 is the 137 MB Nomic file. Full fp32 is about 547 MB and is more
+    // than a small deploy host needs for this corpus.
+    pending = modelId.includes("nomic-embed-text")
+      ? pipeline("feature-extraction", modelId, { dtype: "q8" })
+      : pipeline("feature-extraction", modelId);
     loaded.set(modelId, pending);
   }
   return pending;

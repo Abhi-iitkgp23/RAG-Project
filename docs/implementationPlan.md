@@ -17,7 +17,7 @@ The architecture leaves these choices open. They are fixed here so implementatio
 | Tests | Vitest. Chunking, retrieval scoring, scope scan, and citation binding are pure and run without a live model. |
 | Identifiers | `crypto.randomUUID()` for conversations and messages. Chunk ids stay `{documentId}:{ordinal}`. |
 | App shell | Next.js App Router, TypeScript, one page. `better-sqlite3` is listed in `serverExternalPackages`. |
-| Embedding input | Section heading, a blank line, then the chunk text. A query is embedded as the question alone. The stored passage stays `text`, so a quote still has to match that column. |
+| Embedding input | Section heading, a blank line, then the chunk text. The stored passage stays `text`, so a quote still has to match that column. This deployment embeds with on-device Nomic, which prefixes a chunk `search_document: ` and a query `search_query: `. Without a Nomic model, a query is the question alone. |
 
 ## Invariants
 
@@ -82,7 +82,7 @@ Phases 4, 6, and 7 can be built in any order after their own dependencies. Phase
 - `src/lib/corpus.ts` — the four-document manifest (id, name, publisher, year, URL, form) and the alias map. No fetch yet.
 - Empty module files for `model.ts`, `scope.ts`, `decline.ts`, `coverage.ts`, `prompt.ts`, `retrieve.ts`, `ground.ts`, `store.ts`, so later phases fill known paths.
 - `src/app/page.tsx` as a placeholder. `src/app/api/chat/route.ts` and `src/app/api/conversations/[id]/route.ts` return `501` until their phases.
-- `.env.example` with `OPENAI_API_KEY`, `OPENAI_MODEL`, `EMBEDDING_MODEL`, `DATA_DIR`.
+- `.env.example` with `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `DATA_DIR`.
 - `.gitignore` for `.env`, `data/guidance.db`, `data/nutrition.db`, `data/raw/`, and `evals/runs/`.
 
 **Tasks**
@@ -136,11 +136,11 @@ Phases 4, 6, and 7 can be built in any order after their own dependencies. Phase
 PDF (`dgi-2024`, `eatwell-2018`), via `pdfjs-dist`:
 
 - Keep each text item’s string, font size, and position. Items on the same baseline become a line. Lines become blocks.
-- A heading is a line whose font size is above the page body size, or a short line that is visually heavier than its neighbors.
-- `sectionHeading` is the nearest heading above the block. Keep a heading stack so a subsection still names its parent (`"Fats and oils › Visible fats"`).
-- A table is consecutive lines whose items share a baseline and line up in repeated horizontal positions. Render cells joined by ` | `.
+- A heading is a line at least 1.12 times the page body size, and at least 1.35 times when the line is longer than 100 characters, or a short heavier line near body size. Wrapped heading lines of the same rank are joined.
+- `sectionHeading` is the heading stack joined with ` › `, so a subsection still names its parent. On this extract many headings absorbed a following line or a table caption: 476 are longer than 200 characters, and 265 contain ` | `.
+- A table is consecutive lines whose cells line up. A two-column gutter is not a table. Render cells joined by ` | `.
 - A numbered recommendation (`1.`, `1)`, or a guideline number at the start of the line) is its own unit, including the paragraph that belongs to that number.
-- Drop a short line that repeats on most pages (running header, footer, page number).
+- Drop a short margin line when the same text appears on at least 35% of pages, and drop a margin page number. A footer that includes the page number is a different string on each page, so it stays in the text.
 
 HTML (`cold-storage-2023`, `fsa-chill-2017`), via `cheerio`:
 
@@ -158,23 +158,23 @@ On the current extract, almost every unit already fits the hard max. The 1,200-c
 
 | Document | Units on the current extract | Shape | Over 2,000 characters |
 | --- | --- | --- | --- |
-| `dgi-2024` | about 1,057 (863 sections, 166 tables, 28 recommendations) | Headed narrative under each guideline, plus nutrient and diet tables that belong to that booklet | 15 sections, the longest about 4,300 characters, each with paragraph breaks. No table. No recommendation (longest 368). |
-| `eatwell-2018` | about 88 (64 sections, 19 tables, 5 recommendations) | Prose pages plus the food-group chart as small tables. Curved plate letters are already dropped | None. Longest section about 1,900 characters. |
-| `cold-storage-2023` | 15 (13 categories, one intro, one review date) | One category per food. Leftovers is one unit and contains cooked poultry with its refrigerator time | None. Eggs is the longest category, about 1,300 characters. |
-| `fsa-chill-2017` | 6 sections | Lists already sit inside the headed section | None. Longest section about 1,950 characters. |
+| `dgi-2024` | 1,057 (863 sections, 166 tables, 28 recommendations) | Headed narrative under each guideline, plus nutrient and diet tables that belong to that booklet | 15 sections, the longest 4,340 characters, each with paragraph breaks. No table. No recommendation (longest 368). |
+| `eatwell-2018` | 88 (64 sections, 19 tables, 5 recommendations) | Prose pages plus the food-group chart as small tables. Curved plate letters are already dropped | None. Longest section 1,921 characters. |
+| `cold-storage-2023` | 15 (13 categories, one intro, one review date) | One category per food. Leftovers is one unit and contains cooked poultry with its refrigerator time | None. Eggs is the longest category, 1,279 characters. |
+| `fsa-chill-2017` | 6 sections | Lists already sit inside the headed section. This extract has no unit whose kind is `list` | None. Longest section 1,950 characters. |
 
 | Unit from the parser | Treatment |
 | --- | --- |
 | `section` or `list` at or under 2,000 characters | One chunk. `unitKind` is `section`. No overlap. A parser `list` is stored as `section`. |
 | `recommendation` | One chunk. `unitKind` is `recommendation`. No overlap. In this extract every recommendation is under 400 characters. |
-| `table` at or under 2,000 characters | One chunk, header row included. `unitKind` is `table`. No overlap. In this extract every table fits; the longest is about 1,600 characters. |
-| `category` | One chunk even above 2,000 characters. Do not split between its rows. `unitKind` is `category`. The header row is already on the unit. In this extract all 13 fit, including Eggs, Ham, and Leftovers. |
-| `section` above 2,000 characters | Split on blank-line paragraph boundaries (`\n\n`) toward the 1,200-character target. Overlap is 200 characters, and only on these pieces. `unitKind` is `paragraph-split`. On this extract that is about 15 Dietary Guidelines sections, including the fats-and-oils narrative. Do not cut on ` \| `. That marker is a table cell or a leftover column join, not a paragraph boundary. A paragraph that is still over 2,000 characters stays whole. |
+| `table` at or under 2,000 characters | One chunk, header row included. `unitKind` is `table`. No overlap. In this extract every table fits; the longest is 1,570 characters. |
+| `category` | One chunk even above 2,000 characters. Do not split between its rows. `unitKind` is `category`. The header row is already on the unit. In this extract all 13 fit, including Eggs (1,279), Ham (913), and Leftovers. |
+| `section` above 2,000 characters | Split on blank-line paragraph boundaries (`\n\n`) toward the 1,200-character target. Overlap is 200 characters, and only on these pieces. `unitKind` is `paragraph-split`. On this extract, 14 of the 15 oversized Dietary Guidelines sections split this way, into 42 chunks: the introduction, the current diet scenario, and guidelines 4, 5, 6, 9, 13, and 17. Guideline 7, the oils passage, does not. Do not cut on ` \| `. That marker is a table cell or a leftover column join, not a paragraph boundary. A paragraph that is still over 2,000 characters stays whole. When the other paragraphs in that section are under 80 characters, they merge back, one group remains, and the chunk stays `section`. |
 | `table` above 2,000 characters, and not a storage category | Split between rows. Each piece repeats the header row. A row is never divided. `unitKind` stays `table`. The log counts these as row-splits. This extract has none; a fixture still covers the rule. |
 
 Constants, unchanged from the architecture: target 1,200 characters, hard max 2,000, overlap 200, minimum prose 80 characters.
 
-A chunk under 80 characters of prose is not indexed alone. Prefix it to the following chunk of the same document; that chunk keeps its own `sectionHeading` and `unitKind`. This extract has several hundred such stubs, mostly front-matter lines in the Indian guidelines and short Eatwell labels such as a food-group name. A stub that is the last unit of a document, such as the Cold Food Storage review date, is appended to the previous chunk of that document.
+A chunk under 80 characters of prose is not indexed alone. Prefix it to the following chunk of the same document; that chunk keeps its own `sectionHeading` and `unitKind`. This extract has 487 such units: 448 in the Indian guidelines, 37 short Eatwell labels, the FSA word “Guidance”, and the Cold Food Storage review date. A stub that is the last unit of a document is appended to the previous chunk. The review date is appended to the Leftovers chunk.
 
 Every chunk carries `id` (`{documentId}:{ordinal}`), citation fields copied from the corpus manifest and that document's `fetch.json` (`documentName`, `publisher`, `year`, `sourceUrl`, `retrievedAt`), `sectionHeading`, `text`, and `unitKind` (`section`, `recommendation`, `table`, `category`, or `paragraph-split`).
 
@@ -208,28 +208,31 @@ Counted from `data/chunks/chunk.json`:
 | --- | ---: | ---: | ---: | ---: |
 | `dgi-2024` | 637 | 319,904 | 316 | 2,147 |
 | `eatwell-2018` | 51 | 29,567 | 466 | 1,965 |
-| `cold-storage-2023` | 14 | 5,762 | 299 | 1,279 |
+| `cold-storage-2023` | 14 | 5,762 | 301 | 1,279 |
 | `fsa-chill-2017` | 5 | 6,651 | 1,423 | 1,950 |
 | Total | 707 | 361,884 | 325 | 2,147 |
 
-Kinds: 530 `section`, 103 `table`, 42 `paragraph-split`, 19 `recommendation`, 13 `category`. 217 Dietary Guidelines chunks are under 200 characters. 466 chunks contain a ` | ` row. The text is English; none of it is Devanagari. The 42 `paragraph-split` chunks hold 45,704 characters. A neighbour in that set repeats the previous piece’s last 200 characters, so the sentence at each cut is embedded twice.
+Kinds: 530 `section`, 103 `table`, 42 `paragraph-split`, 19 `recommendation`, 13 `category`. 217 Dietary Guidelines chunks are under 200 characters. 466 chunks contain ` | `. Of those, 103 are `table` chunks and 13 are storage categories; the other 350 are section, paragraph-split, or recommendation text where a column join or a name list survived. The text is English; none of it is Devanagari. The 42 `paragraph-split` chunks hold 45,704 characters. A neighbour in that set starts with the previous piece’s last 200 characters, so those characters are embedded twice. The cut is a paragraph boundary.
 
 Nine tenths of the vectors are `dgi-2024`. A fridge-life question searched over the full corpus is mostly compared with that booklet. `k` stays 6, because the answer model still sees at most six passages, and the Leftovers category is already one chunk. `MIN_SCORE` stays `0.30`. This file has no similarity scores yet, so the floor moves only when the frozen question set is re-run.
 
 **Model**
 
-Use OpenAI `text-embedding-3-small` at its default 1,536 dimensions. Do not pass `dimensions`, and do not call `text-embedding-3-large` or `text-embedding-ada-002`.
+This deployment embeds on the server with `nomic-ai/nomic-embed-text-v1.5`, set as `EMBEDDING_MODEL=local:nomic-ai/nomic-embed-text-v1.5` and `EMBEDDING_DIMENSIONS=768`. The weights are the q8 ONNX file under `data/models/`. Groq, which serves the answer model for this key, does not serve an embedding model, so the app process embeds. Unset, `EMBEDDING_MODEL` stays `text-embedding-3-small` at its default 1,536 dimensions. That API path does not pass `dimensions`, and it does not call `text-embedding-3-large` or `text-embedding-ada-002`.
 
-| | This index | `text-embedding-3-small` | `text-embedding-3-large` |
+| | This index | On-device Nomic | API fallback |
 | --- | --- | --- | --- |
-| Longest input | 2,147 characters, about 540 tokens at four characters per token | 8,192 tokens | 8,192 tokens |
-| Vectors to score | 707 | 1,536 floats, about 4.1 MB | 3,072 floats, about 8.3 MB |
-| Text | English guidance, table rows, and storage categories | MTEB 62.3 | MTEB 64.6 |
-| Published price | about 90,000 tokens for the whole file | $0.02 / 1M tokens | $0.13 / 1M tokens |
+| Model | 707 chunks | `nomic-embed-text-v1.5`, 768 floats, q8 | `text-embedding-3-small`, 1,536 floats |
+| Longest stored text | `dgi-2024:296`, 2,147 characters | 8,192-token context | 8,192-token context |
+| Longest string embedded | `dgi-2024:448`, 2,640 characters, about 660 tokens | heading plus text, then the task prefix | heading plus text |
+| Vectors in memory | 707 | about 2.1 MB of float32 | about 4.1 MB of float32 |
+| One batch | — | 8 inputs and 8,192 estimated tokens | 2,048 inputs and 300,000 tokens |
 
-Every chunk fits in the 8,192-token input with a wide margin, including the longest oils passage (`dgi-2024:296`, 2,147 characters, kept whole because it is one paragraph). Scoring 707 vectors of 1,536 floats in process memory is the flat index the architecture already specifies. The larger model adds about two MTEB points and doubles every vector. On this file the hard cases are the 90% Dietary Guidelines share and the questions the documents do not cover, and those are handled by the document filter and `MIN_SCORE`. `text-embedding-ada-002` is the previous 1,536-dimension model and scores below small on the same benchmark.
+The longest stored passage is the oils chunk. It is not one paragraph. The unit is a 2,071-character paragraph plus a 74-character running footer, `ICMR-National Institute of Nutrition | 54 | Dietary Guidelines for Indians`. The footer is under 80 characters, so it is merged back, one group remains, and `unitKind` stays `section`. That is why the chunk is 2,147 characters, over the hard max. Its embedding input is 2,511 characters because the heading is 362 characters and includes a sentence fragment and a table caption.
 
-The string that is embedded for a chunk is the section heading, a blank line, and then the chunk text:
+Chunk text alone is 361,884 characters, about 90,000 tokens at four characters per token. The string that is embedded is longer, because the heading is on it: 529,665 characters, about 132,000 tokens, and about 135,000 once each chunk has the Nomic prefix. Every chunk still fits the 8,192-token context. Scoring 707 vectors of 768 floats in process memory is the flat index. On this file the hard cases are the 90% Dietary Guidelines share and the questions the documents do not cover, and those are handled by the document filter and `MIN_SCORE`.
+
+The body embedded for a chunk is the section heading, a blank line, and then the chunk text:
 
 ```text
 {sectionHeading}
@@ -237,9 +240,9 @@ The string that is embedded for a chunk is the section heading, a blank line, an
 {text}
 ```
 
-The `text` column is unchanged. Quotes match that column. The heading has to be on the vector because the shortest chunks are table headers: `dgi-2024:323` is 80 characters of protein-column titles, and the guideline name is only in `sectionHeading`. A query embedding is the rewritten question by itself, with no heading prefix. Same model, same 1,536 dimensions.
+A Nomic model receives that body prefixed with `search_document: `. The `text` column is unchanged. Quotes match that column. The heading has to be on the vector for the short chunks. Three chunks are exactly 80 characters, the shortest length indexed alone. `dgi-2024:323` is protein-column titles stored as `section`; the guideline name is only in `sectionHeading`. The other two are a guideline-10 recommendation title (`dgi-2024:362`) and a diet line (`dgi-2024:590`). A query has no heading prefix. Nomic prefixes it with `search_query: `; any other model embeds the rewritten question alone. Same model and same width for chunks and queries. The width is `EMBEDDING_DIMENSIONS`, or 1,536 when that variable is unset.
 
-One embeddings request accepts at most 2,048 inputs and 300,000 tokens in total. These 707 chunks are about 90,000 tokens, so the first ingest fits in a single call. Batch with those two caps anyway, so a later re-parse that grows the index still succeeds. The request path embeds one query at a time.
+On-device ingest batches at most 8 inputs and 8,192 estimated tokens, so these 707 chunks take many calls. The API fallback batches at most 2,048 inputs and 300,000 tokens; the heading-plus-text file still fits in one such call. Batch with whichever caps the configured model uses, so a later re-parse that grows the index still succeeds. The request path embeds one query at a time.
 
 **Index**
 
@@ -271,8 +274,8 @@ create table chunks (
 
 **Tasks**
 
-1. Implement `EmbeddingClient` in `model.ts` for `text-embedding-3-small` at the default 1,536 dimensions. Default the model id from `EMBEDDING_MODEL`. Do not set `dimensions`. Ingest embeds `{sectionHeading}\n\n{text}` in batches of at most 2,048 inputs and 300,000 tokens. The request path embeds one query string at a time.
-2. Skip re-embedding when `contentHash` is unchanged and the embedding input (heading plus text) is unchanged. Replace `guidance.db` only after a successful write (write a temp file, then swap), so a failed embed leaves the previous index readable.
+1. Implement `EmbeddingClient` in `model.ts`. `local:<huggingface id>` embeds on this machine; any other id uses the API and does not pass `dimensions`. Default an unset `EMBEDDING_MODEL` to `text-embedding-3-small`. This deployment sets `local:nomic-ai/nomic-embed-text-v1.5` and `EMBEDDING_DIMENSIONS=768`. Ingest embeds the heading, a blank line, and the text. A Nomic model prefixes a chunk with `search_document: ` and a query with `search_query: `. On-device batches stay within 8 inputs and 8,192 estimated tokens. API batches stay within 2,048 inputs and 300,000 tokens. The request path embeds one query string at a time.
+2. Skip re-embedding when `contentHash` is unchanged, the embedding input (heading plus text, including a Nomic prefix) is unchanged, and the stored vector width matches `EMBEDDING_DIMENSIONS`. Replace `guidance.db` only after a successful write (write a temp file, then swap), so a failed embed leaves the previous index readable.
 3. Store each vector as a float32 blob.
 4. Implement `retrieve.ts`:
    - Load all chunks into memory at process start.
@@ -286,7 +289,7 @@ create table chunks (
 **Exit check**
 
 - Ingest completes and prints chunk counts that match the current extract: `dgi-2024` 637, `eatwell-2018` 51, `cold-storage-2023` 14, `fsa-chill-2017` 5 (707). A later re-parse that changes those counts updates `docs/ingest-record.md` in the same run.
-- A second ingest with unchanged bytes does not call the embedding API (assert via a counter or a skipped-batch log).
+- A second ingest with unchanged bytes does not embed again (assert via a counter or a skipped-batch log).
 - A small script or test retrieves “how long does cooked chicken last in the refrigerator” and returns a `cold-storage-2023` or `fsa-chill-2017` chunk above `MIN_SCORE`.
 - The same query with `documentId: "eatwell-2018"` returns only that document, or an empty list when nothing clears `MIN_SCORE`.
 - A nonsense string returns an empty list.
@@ -561,7 +564,7 @@ The README is the assessor’s one-page record. It states:
 
 - Corpus: the four URLs, with publisher, year, and the retrieval date from `fetch.json`.
 - Chunking: structure-aware units, target 1,200 characters, hard max 2,000, overlap 200 only on oversized narrative splits. What stays whole, and what still gets split, in the words the architecture uses. Include the character, heading, table, and chunk counts from `docs/ingest-record.md`.
-- Retrieval: `text-embedding-3-small`, flat cosine in SQLite, `k = 6`, `MIN_SCORE = 0.30`, full-corpus and single-document filter.
+- Retrieval: on-device `nomic-ai/nomic-embed-text-v1.5` at 768 dimensions, with `text-embedding-3-small` as the unset default; flat cosine in SQLite, `k = 6`, `MIN_SCORE = 0.30`, full-corpus and single-document filter.
 - Answer rule: a claim ships only with a server-built citation. The two refusal sentences, and which module emits each.
 
 **Deploy**

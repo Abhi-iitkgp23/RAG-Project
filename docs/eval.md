@@ -2,7 +2,7 @@
 
 Frozen question set and tally for Phase 10 of [implementationPlan.md](./implementationPlan.md). The wider corner catalog lives in [edgeCase.md](./edgeCase.md). `npm run eval` posts only the items in this file.
 
-`src/evals/questions.ts` copies the messages below. `EVAL_SET_VERSION` is `1`. A wording change bumps that version, writes the reason into `docs/failure-log.md`, and is unfinished until a new run exists. The script does not edit the prompt, the chunker, the scope rules, `k`, or `MIN_SCORE`.
+`src/evals/questions.ts` copies the messages below. `EVAL_SET_VERSION` is `1`. A wording change bumps that version, writes the reason into `docs/failure-log.md`, and is unfinished until a new run exists. The script does not edit the prompt, the chunker, the scope rules, `k`, `MIN_SCORE`, or the embedding model.
 
 ## What a run is
 
@@ -19,6 +19,12 @@ The app is already serving `POST /api/chat`. The script does not start the serve
 Each item is one user turn. Setup turns are stored in the run directory and stay out of the pass count. A setup that returns HTTP 422, HTTP 500, or no `conversationId` blocks the scored follow-up on that thread.
 
 The script writes `evals/runs/<timestamp>/` and prints a tally. Exit code is 0 when every scored item passes. Exit code is 1 when any scored item fails or is blocked.
+
+## Index this run scores against
+
+Retrieval for this set uses the on-device index in [architecture.md](./architecture.md): `nomic-ai/nomic-embed-text-v1.5`, 768 dimensions, q8 weights under `data/models/`. A chunk is embedded as `search_document: `, then the section heading, a blank line, and the chunk text. A query is embedded as `search_query: ` plus the rewritten question, with no heading. `k` is 6. `MIN_SCORE` stays `0.30`. The floor moves only when this frozen set is re-run.
+
+The app under test embeds on this machine. The eval script still only posts to `POST /api/chat`. It does not call an embeddings host. A run scored while `guidance.db` was missing, or while embeddings were sent to a chat host that does not serve them, does not count. The failure log cites the next full run after this index exists.
 
 ## Corpus values the tally is allowed to expect
 
@@ -90,11 +96,11 @@ C1 is one scored result. It passes only when C1-1, C1-2, and C1-3 each pass thei
 
 `coverage` is `answered`. Every claim has a complete source. Every source URL is the same dietary document, either Dietary Guidelines for Indians or the Eatwell Guide. A second dietary document fails G1. A storage URL fails G1. G3 is the item that requires both dietary documents.
 
-The quote check stays in the failure log. The envelope carries neither `quote` nor `chunkId`.
+The quote check stays in the failure log. The envelope carries neither `quote` nor `chunkId`. A supporting span has to sit in that chunk’s `text`. The heading and the Nomic `search_document: ` prefix do not count.
 
 ### G2 — fridge life
 
-`coverage` is `answered`. Every claim has a complete source. Every source URL is the Cold Food Storage Chart URL or the Food Standards Agency chilling page URL. At least one of those two is present. A dietary URL fails G2.
+`coverage` is `answered`. Every claim has a complete source. Every source URL is the Cold Food Storage Chart URL or the Food Standards Agency chilling page URL. At least one of those two is present. A dietary URL fails G2. The G1 quote check applies.
 
 ### G3 — cooking oil, both dietary documents
 
@@ -247,7 +253,7 @@ Eval set: 1
 | Counter | How it is counted |
 | --- | --- |
 | Incomplete source | Any scored `answered` claim whose name, publisher, year, and url do not match one corpus row. The tally already fails these. The log lists the ids. |
-| Quote not in the cited chunk | For each `answered` claim, open every chunk in `guidance.db` with that source URL and `sectionHeading`. Paragraph-split neighbours share a heading, so the heading is not one chunk. Record a miss when none of those chunks has a verbatim span of at least 20 characters in its `text` column that supports the claim. A span that appears only in the heading prefix of the embedding string does not count. Binding checks the model’s `quote` against one chunk before the claim ships. The run file does not store that quote, so this counter is the check a person can still do. |
+| Quote not in the cited chunk | For each `answered` claim, open every chunk in `guidance.db` with that source URL and `sectionHeading`. Paragraph-split neighbours share a heading, so the heading is not one chunk. Record a miss when none of those chunks has a verbatim span of at least 20 characters in its `text` column that supports the claim. A span that appears only in the heading, or only in the Nomic `search_document: ` prefix, does not count. Binding checks the model’s `quote` against one chunk’s `text` before the claim ships. The run file does not store that quote, so this counter is the check a person can still do. |
 | Blended authority | `answer` ranks the documents, picks a publisher to follow, or speaks as if the corpus were one authority. G3’s phrase list is the automated part. Other winner wording is counted here. |
 | Coverage miss | G1, G2, or G3 is `not_in_corpus` or `declined`. G4 cites another document, or its coverage sentence names the full corpus. G5 is `answered` or `declined`. |
 | Scope miss | S1, S2, S3, S4, S5, or S6 is anything other than the professional decline. |
@@ -261,7 +267,11 @@ The current `evals/runs/<timestamp>/` directory stops counting once any of these
 - the chunker, the parsers, or the chunk-size constants
 - the scope classifier prompt or the output scan
 - `k` or `MIN_SCORE`
+- `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, or the task prefixes `search_document: ` and `search_query: `
+- the embedding input, which is the heading, a blank line, and the chunk text
 - the four corpus URLs, or the bytes under `data/raw/`
 - the messages in this file
+
+A run from before the on-device Nomic index is stale under those rules. `evals/runs/2026-10-08T18-41-30Z` is that kind of run: embeddings were an API model on a host that does not serve them, and `guidance.db` was missing.
 
 The next `npm run eval` is the run the failure log cites. A change made to turn one red item green is unfinished until that full set has been posted again.

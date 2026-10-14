@@ -77,6 +77,18 @@ Return decision "decline" and exactly one category when the turn asks for any of
 - weight_recommendation: a goal weight, a weight range, a BMI target, or what anyone should weigh.
 - medical_advice: what to eat, take, or avoid for a named condition, symptom, medication, pregnancy complication, allergy treatment, or diagnosis. Thirst and staying hydrated are not conditions. "What should I drink for my dehydration" is medical_advice. "How much water should I drink in summer to stay hydrated" is allow.
 
+A general question about what to eat each day is population dietary guidance. Allow it. It is not a calorie target unless it asks for a personal calorie number, a deficit, a surplus, or a weight goal. "What should I eat", "what should I eat daily", and "what should I eat this week" are allow.
+
+Also allow, with category none, when the turn does not ask for a personal calorie number, a weight goal, or a diet for a named condition:
+- how much water or other fluid to drink
+- what a named document recommends, including the Eatwell Guide and the Indian dietary guidelines
+- whether a named food belongs in a balanced diet
+- how to store, chill, or keep a food, including cooked rice in the fridge
+
+Do not decline those because they use "I", "should", "daily", or a number that is a duration or a portion.
+
+How many calories or other nutrients are in one named food is not a personal calorie target. Allow it. Do not treat that lookup as calorie_target.
+
 Judge only the messages in this request. If the current message is out of scope, decline even when earlier messages were ordinary food questions. If an earlier message was out of scope and the current message is an ordinary food or storage question, allow it.`;
 
 /**
@@ -93,11 +105,12 @@ export async function classifyScope(
   preceding: readonly ScopeTurn[] = [],
 ): Promise<ScopeDecision> {
   const history = preceding.slice(-PRECEDING_MESSAGE_LIMIT);
+  const current = currentMessage.trim().replace(/\s+/g, " ");
   let raw: unknown;
   try {
     raw = await client.complete({
       system: SCOPE_CLASSIFIER_PROMPT,
-      messages: [...history, { role: "user", content: currentMessage }],
+      messages: [...history, { role: "user", content: current }],
       schema: SCOPE_DECISION_SCHEMA,
       schemaName: SCOPE_SCHEMA_NAME,
     });
@@ -123,6 +136,112 @@ export function interpretScopeDecision(raw: unknown): ScopeDecision {
     return { outcome: "decline", category: "unparsed" };
   }
   return { outcome: "decline", category: parsed.data.category };
+}
+
+const PERSONAL_OR_CLINICAL =
+  /\b(?:calor(?:ie|ies|ic)|kcal|weigh|weight|bmi|deficit|surplus|lose (?:fat|weight)|for my|diabetes|diabetic|hypertension|pregnan\w*|allerg\w*|medication|medicine|diagnos\w*|dehydration)\b/i;
+
+/** Daily food-group guidance, with no personal target or clinical ask. */
+export function isGeneralDietQuestion(message: string): boolean {
+  return (
+    /\b(?:what|which)\b[^?.!]{0,80}\b(?:eat|eats|eating|diet|foods?)\b/i.test(message) &&
+    !PERSONAL_OR_CLINICAL.test(message)
+  );
+}
+
+/** A nutrient amount in a named food, rather than a personal calorie target. */
+export function isFoodNutrientLookup(message: string): boolean {
+  return (
+    /\b(?:how many|how much)\b[^?.!]{0,60}\b(?:calories|kcal|kilocalories|protein|carbohydrates?|carbs|fats?|sugars?|fibre|fiber|sodium|nutrients?)\b[^?.!]{0,60}\b(?:in|of)\b/i.test(
+      message,
+    ) && !/\b(?:should i|to lose|deficit|surplus)\b/i.test(message)
+  );
+}
+
+/** Population fluid guidance, including water. Thirst as a condition stays out. */
+export function isPopulationFluidQuestion(message: string): boolean {
+  return (
+    /\b(?:waters?|fluids?|hydrat\w*|drinks?|drinking)\b/i.test(message) &&
+    !PERSONAL_OR_CLINICAL.test(message)
+  );
+}
+
+const NAMED_CONDITION =
+  /\b(?:diabetes|diabetic|hypertension|pregnan\w*|allerg\w*|medications?|medicines?|diagnos\w*|dehydration|cancer|symptoms?)\b/i;
+
+const PERSONAL_CALORIE =
+  /\b(?:calor(?:ie|ies|ic)|kcal|kilocalories)\b/i;
+
+/**
+ * A personal calorie number, a weight goal, or a diet for a named condition.
+ * A nutrient lookup in a named food is not one of these.
+ */
+export function isRestrictedPersonalRequest(message: string): boolean {
+  if (isFoodNutrientLookup(message)) return false;
+  if (NAMED_CONDITION.test(message)) return true;
+  if (
+    PERSONAL_CALORIE.test(message) &&
+    /\b(?:should|deficit|surplus|to lose|to gain|lose weight|drop fat|my)\b/i.test(message)
+  ) {
+    return true;
+  }
+  return (
+    /\bshould\s+i\s+weigh\b/i.test(message) ||
+    /\b(?:goal|target)\s+weight\b/i.test(message) ||
+    /\bweight\s+(?:goal|target)\b/i.test(message) ||
+    (/\bbmi\b/i.test(message) && /\b(?:should|aim|target|my)\b/i.test(message)) ||
+    /\b(?:lose|gain|drop)\s+(?:weight|fat)\b/i.test(message) ||
+    /\b(?:lose|gain|drop)\s+\d[\d,]*(?:\.\d+)?(?:\s*[-–]\s*\d[\d,]*(?:\.\d+)?)?\s*(?:kg|kgs|kilograms?|lb|lbs|pounds?)\b/i.test(
+      message,
+    )
+  );
+}
+
+const GUIDANCE_TOPIC =
+  /\b(?:eat|eats|eating|diet|dietary|foods?|eatwell|guidelines?|guidance|hydrat\w*|waters?|fluids?|drinks?|drinking|stor(?:e|ed|age)|fridge|freezer|refrigerat\w*|chill|defrost|leftovers?|cooked|cook(?:ing)?|oils?|fats?|fruits?|vegetables?|milk|honey|rice|millets?|chicken|meat|fish|eggs?|bread|cereal|salt|sugar|nutrients?|balanced)\b/i;
+
+/**
+ * Population diet, fluid, storage, or document questions. Personal targets
+ * and named-condition diets stay out, so a decline of those still stands.
+ */
+export function isOrdinaryGuidanceQuestion(message: string): boolean {
+  if (isRestrictedPersonalRequest(message)) return false;
+  if (
+    isGeneralDietQuestion(message) ||
+    isPopulationFluidQuestion(message) ||
+    isFoodNutrientLookup(message)
+  ) {
+    return true;
+  }
+  const asks =
+    /\b(?:what|which|how|when|where|is|are|does|do|can|should|could|would)\b/i.test(
+      message,
+    );
+  return asks && GUIDANCE_TOPIC.test(message);
+}
+
+/**
+ * The classifier sometimes labels a general diet, fluid, storage, or
+ * food-nutrient question as a personal target. Those still go to retrieval.
+ * An unparsed decision does not. A real calorie, weight, or medical request
+ * does not.
+ */
+export function allowDespiteDecline(
+  message: string,
+  category: ScopeCategory | "unparsed",
+): boolean {
+  if (category === "unparsed") return false;
+  if (isRestrictedPersonalRequest(message)) return false;
+  if (category === "calorie_target" && isFoodNutrientLookup(message)) return true;
+  if (
+    (category === "calorie_target" ||
+      category === "medical_advice" ||
+      category === "weight_recommendation") &&
+    isOrdinaryGuidanceQuestion(message)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 const PERSONAL_PLAN_PHRASES = [
