@@ -102,7 +102,7 @@ describe("release index check", () => {
     const result = await prepareIndex({
       indexPath,
       manifestPath,
-      env: { INGEST_ON_RELEASE: "0" },
+      env: { INGEST_ON_RELEASE: "0" } as NodeJS.ProcessEnv,
       ingest: async () => {
         called = true;
       },
@@ -123,7 +123,7 @@ describe("release index check", () => {
     const result = await prepareIndex({
       indexPath,
       manifestPath,
-      env: { INGEST_ON_RELEASE: "0" },
+      env: { INGEST_ON_RELEASE: "0" } as NodeJS.ProcessEnv,
       ingest: async () => {
         called = true;
         writeFileSync(indexPath, "built");
