@@ -1,6 +1,6 @@
 [build]
-builder = "NIXPACKS"
-buildCommand = "cd node_modules/better-sqlite3 && npx --yes node-gyp clean && npx --yes node-gyp rebuild --release --force_build=1 && cp build/Release/better_sqlite3.node prebuilds/linux-$(node -p process.arch).node && cd ../.. && npm run build"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "sh scripts/release.sh"
