@@ -6,6 +6,28 @@ A chatbot that answers from four official public guidance documents. Every claim
 
 The public app is live at https://web-production-d9aa5.up.railway.app
 
+## Videos
+
+Three recordings of that app. Each GIF is the same clip as the MP4 beside it.
+
+**Cited answer.** "How should I store leftovers?" returns storage times with a citation.
+
+![Cited answer for storing leftovers](docs/videos/cited-answer.gif)
+
+[cited-answer.mp4](docs/videos/cited-answer.mp4)
+
+**Outside what this assistant can answer.** A daily calorie target is refused.
+
+![Calorie target refused](docs/videos/declined.gif)
+
+[declined.mp4](docs/videos/declined.mp4)
+
+**Not in the guidance.** Home kombucha brewing is not in the four documents.
+
+![Kombucha question not in the guidance](docs/videos/not-in-guidance.gif)
+
+[not-in-guidance.mp4](docs/videos/not-in-guidance.mp4)
+
 ## Corpus
 
 The four public URLs are a constant in `src/lib/corpus.ts`. Nutrient databases and any source with a clean API stay out. The timestamps below are `retrievedAt` in each document's `fetch.json`, from the fetch on 2026-10-13.
