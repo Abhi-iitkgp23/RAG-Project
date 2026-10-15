@@ -35,7 +35,13 @@ import {
   IconTrash,
 } from "./icons";
 import { AboutAssistant, BrandLockup, HowItWorks } from "./site-chrome";
-import { OfficialSources, SourceItem, SourcesChecked, UnsupportedAnswer } from "./sources-panel";
+import {
+  OfficialSources,
+  SourceItem,
+  SourcesChecked,
+  UnsupportedAnswer,
+  officialSourceLibrary,
+} from "./sources-panel";
 
 type AssistantTurn = ChatResponse["message"];
 
@@ -58,9 +64,8 @@ const HISTORY_LIMIT = 30;
 const NARROW_QUERY = "(max-width: 719px)";
 const WELCOME_PROMPTS = [
   "What should I eat daily?",
-  "Daily water intake",
-  "Food storage and leftovers",
-  "Explore an official guide",
+  "How much water should I drink?",
+  "How should I store leftovers?",
 ] as const;
 
 function isNotice(entry: ThreadEntry): entry is Notice {
@@ -263,7 +268,7 @@ export function ClaimCitations({ claims }: { claims: Claim[] }) {
   if (claims.length === 0) return null;
   return (
     <div className="source-block">
-      <p className="source-kicker">{claims.length === 1 ? "Source" : "Sources"}</p>
+      <p className="source-kicker">Official source citation</p>
       <ul className="source-list">
         {claims.map((claim, index) => (
           <li key={`${claim.source.url}-${claim.source.sectionHeading}-${index}`}>
@@ -312,7 +317,7 @@ function Dialog({
   dialogId: string;
   labelledBy: string;
   onClose: () => void;
-  variant: "sheet" | "center" | "dock";
+  variant: "sheet" | "center" | "drawer";
   className?: string;
   children: ReactNode;
 }) {
@@ -330,7 +335,7 @@ function Dialog({
         onClose();
         return;
       }
-      if (variant === "dock" || event.key !== "Tab" || !dialog) return;
+      if (event.key !== "Tab" || !dialog) return;
       const items = [
         ...dialog.querySelectorAll<HTMLElement>("button:not(:disabled), a[href], input, textarea"),
       ];
@@ -357,31 +362,19 @@ function Dialog({
 
   if (!open) return null;
 
-  if (variant === "dock") {
-    return (
-      <div
-        id={dialogId}
-        className="sheet is-docked"
-        role="dialog"
-        aria-modal="false"
-        aria-labelledby={labelledBy}
-        ref={ref}
-      >
-        {children}
-      </div>
-    );
-  }
-
   return (
     <div
-      className={variant === "center" ? "overlay is-center" : "overlay"}
+      className={variant === "center" ? "overlay is-center" : "overlay is-drawer"}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <div
         id={dialogId}
-        className={[variant === "center" ? "dialog-card" : "sheet", className]
+        className={[
+          variant === "center" ? "dialog-card" : "sheet is-drawer",
+          className,
+        ]
           .filter(Boolean)
           .join(" ")}
         role="dialog"
@@ -406,7 +399,6 @@ export function Chat() {
   const [history, setHistory] = useState<ThreadSummary[]>([]);
   const [navOpen, setNavOpen] = useState(false);
   const [narrow, setNarrow] = useState(false);
-  const [wide, setWide] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [howOpen, setHowOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<ThreadSummary | null>(null);
@@ -510,20 +502,16 @@ export function Chat() {
 
   useEffect(() => {
     const narrowMedia = window.matchMedia(NARROW_QUERY);
-    const wideMedia = window.matchMedia("(min-width: 1100px)");
     const update = () => {
       const isNarrow = narrowMedia.matches;
       setNarrow(isNarrow);
-      setWide(wideMedia.matches);
       if (!isNarrow) setNavOpen(false);
     };
     update();
     narrowMedia.addEventListener("change", update);
-    wideMedia.addEventListener("change", update);
     window.addEventListener("resize", update);
     return () => {
       narrowMedia.removeEventListener("change", update);
-      wideMedia.removeEventListener("change", update);
       window.removeEventListener("resize", update);
     };
   }, []);
@@ -722,9 +710,10 @@ export function Chat() {
   const showEmpty = ready && entries.length === 0 && !loadError && !switching && !pending;
   const lastEntry = entries[entries.length - 1];
   const composerDisabled = pending || !ready || switching;
-  const dialogOpen = howOpen || pendingDelete !== null || (sourcesOpen && !wide);
+  const dialogOpen = howOpen || pendingDelete !== null || sourcesOpen;
   const barTitle =
-    history.find((item) => item.id === conversationId)?.title ?? "Dietary Guidance Assistant";
+    history.find((item) => item.id === conversationId)?.title ?? "New Guidance Query";
+  const sourceCount = officialSourceLibrary().length;
 
   return (
     <div className="app-shell">
@@ -740,15 +729,17 @@ export function Chat() {
           inert={narrow && !navOpen ? true : undefined}
         >
           <div className="sidebar-top">
-            <button
-              type="button"
-              className="icon-button sidebar-close"
-              aria-label="Close menu"
-              onClick={closeNav}
-            >
-              <IconClose />
-            </button>
-            <BrandLockup />
+            <div className="sidebar-brand-row">
+              <BrandLockup />
+              <button
+                type="button"
+                className="icon-button sidebar-close"
+                aria-label="Close menu"
+                onClick={closeNav}
+              >
+                <IconClose />
+              </button>
+            </div>
             <button
               ref={newChatRef}
               type="button"
@@ -809,38 +800,23 @@ export function Chat() {
           <AboutAssistant />
         </aside>
 
-        <main className={sourcesOpen && wide ? "chat-main has-sources" : "chat-main"} inert={narrow && navOpen ? true : undefined}>
+        <main className="chat-main" inert={narrow && navOpen ? true : undefined}>
           <header className="chat-bar">
-            <button
-              type="button"
-              className="icon-button menu-button"
-              aria-label="Open menu"
-              aria-expanded={navOpen}
-              aria-controls="sidebar"
-              onClick={openNav}
-            >
-              <IconMenu />
-            </button>
-            <p className="chat-bar-title">{barTitle}</p>
-            <div className="chat-bar-actions">
+            <div className="chat-bar-lead">
               <button
                 type="button"
-                className="ghost-button"
-                aria-label="Explore Official Sources"
-                aria-expanded={sourcesOpen}
-                aria-controls="sources-dialog"
-                onClick={() => {
-                  setHowOpen(false);
-                  setPendingDelete(null);
-                  setSourcesOpen(true);
-                }}
+                className="icon-button menu-button"
+                aria-label="Open menu"
+                aria-expanded={navOpen}
+                aria-controls="sidebar"
+                onClick={openNav}
               >
-                <IconBook size={16} />
-                <span className="bar-label-full">Explore Official Sources</span>
-                <span className="bar-label-short" aria-hidden="true">
-                  Sources
-                </span>
+                <IconMenu />
               </button>
+              <p className="chat-bar-title">{barTitle}</p>
+              <span className="version-pill">RAG v1.4</span>
+            </div>
+            <div className="chat-bar-actions">
               <button
                 type="button"
                 className="ghost-button"
@@ -856,7 +832,25 @@ export function Chat() {
                 <IconInfo size={16} />
                 <span className="bar-label-full">How it works</span>
                 <span className="bar-label-short" aria-hidden="true">
-                  Guide
+                  Info
+                </span>
+              </button>
+              <button
+                type="button"
+                className={sourcesOpen ? "ghost-button is-on" : "ghost-button"}
+                aria-label="Explore Official Sources"
+                aria-expanded={sourcesOpen}
+                aria-controls="sources-dialog"
+                onClick={() => {
+                  setHowOpen(false);
+                  setPendingDelete(null);
+                  setSourcesOpen(true);
+                }}
+              >
+                <IconBook size={16} />
+                <span className="bar-label-full">Explore Official Sources</span>
+                <span className="bar-label-short" aria-hidden="true">
+                  Sources ({sourceCount})
                 </span>
               </button>
             </div>
@@ -876,23 +870,42 @@ export function Chat() {
 
               {showEmpty ? (
                 <div className="empty-state">
+                  <div className="empty-mark" aria-hidden="true">
+                    D
+                  </div>
                   <h2>Good guidance starts with a good question.</h2>
                   <p>
                     Ask about everyday dietary guidance or food safety. Answers should be grounded
                     in official public sources.
                   </p>
-                  <div className="welcome-suggestions" role="group" aria-label="Suggested questions">
-                    {WELCOME_PROMPTS.map((prompt) => (
+                  <div className="welcome-block">
+                    <p className="welcome-kicker">Suggested queries</p>
+                    <div className="welcome-suggestions" role="group" aria-label="Suggested questions">
+                      {WELCOME_PROMPTS.map((prompt) => (
+                        <button
+                          key={prompt}
+                          type="button"
+                          className="suggestion welcome-suggestion"
+                          disabled={composerDisabled}
+                          onClick={() => void send(prompt)}
+                        >
+                          <span>{prompt}</span>
+                          <IconSend size={14} />
+                        </button>
+                      ))}
                       <button
-                        key={prompt}
                         type="button"
                         className="suggestion welcome-suggestion"
-                        disabled={composerDisabled}
-                        onClick={() => void send(prompt)}
+                        onClick={() => {
+                          setHowOpen(false);
+                          setPendingDelete(null);
+                          setSourcesOpen(true);
+                        }}
                       >
-                        {prompt}
+                        <span>Explore an official guide</span>
+                        <IconBook size={14} />
                       </button>
-                    ))}
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -915,71 +928,68 @@ export function Chat() {
                     const grouped = severalDocuments(entry.claims);
                     return (
                       <li key={entry.id} className="turn">
-                        <div className="assistant-row">
-                          <div className="assistant-main">
-                            {label ? <p className="coverage-label">{label}</p> : null}
-                            <div className="bubble assistant">
-                              {entry.claims.length === 0 ? (
-                                entry.coverage === "not_in_corpus" ? (
-                                  <>
-                                    <UnsupportedAnswer />
-                                    <SourcesChecked answer={entry.answer} />
-                                  </>
-                                ) : (
-                                  <AnswerText text={entry.answer} />
-                                )
-                              ) : (
-                                entry.claims.map((claim, index) => {
-                                  const previous = entry.claims[index - 1];
-                                  const showHeading =
-                                    grouped &&
-                                    (!previous || previous.source.url !== claim.source.url);
-                                  return (
-                                    <div key={`${entry.id}-${index}`} className="recommendation">
-                                      {showHeading ? <DocumentHeading source={claim.source} /> : null}
-                                      <AnswerText text={claim.text} />
-                                      <ClaimCitations claims={[claim]} />
-                                    </div>
-                                  );
-                                })
-                              )}
-                              <Stamp iso={entry.createdAt} />
-                            </div>
-                            {prompts.length > 0 ? (
-                              <div className="suggestions" role="group" aria-label="Suggested questions">
-                                {prompts.map((prompt) => (
-                                  <button
-                                    key={prompt}
-                                    type="button"
-                                    className="suggestion"
-                                    disabled={composerDisabled}
-                                    onClick={() => void send(prompt)}
-                                  >
-                                    {prompt}
-                                  </button>
-                                ))}
-                                <button
-                                  type="button"
-                                  className="suggestion"
-                                  disabled={composerDisabled}
-                                  onClick={() => composerRef.current?.focus()}
-                                >
-                                  Something else
-                                </button>
-                              </div>
-                            ) : null}
-                          </div>
+                        {label ? <p className="coverage-label">{label}</p> : null}
+                        <div className="turn-meta">
+                          <span className="assistant-name">Dietary Guidance Assistant</span>
+                          <Stamp iso={entry.createdAt} />
                         </div>
+                        <div className="bubble assistant">
+                          {entry.claims.length === 0 ? (
+                            entry.coverage === "not_in_corpus" ? (
+                              <>
+                                <UnsupportedAnswer />
+                                <SourcesChecked answer={entry.answer} />
+                              </>
+                            ) : (
+                              <AnswerText text={entry.answer} />
+                            )
+                          ) : (
+                            entry.claims.map((claim, index) => {
+                              const previous = entry.claims[index - 1];
+                              const showHeading =
+                                grouped &&
+                                (!previous || previous.source.url !== claim.source.url);
+                              return (
+                                <div key={`${entry.id}-${index}`} className="recommendation">
+                                  {showHeading ? <DocumentHeading source={claim.source} /> : null}
+                                  <AnswerText text={claim.text} />
+                                  <ClaimCitations claims={[claim]} />
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                        {prompts.length > 0 ? (
+                          <div className="suggestions" role="group" aria-label="Suggested questions">
+                            {prompts.map((prompt) => (
+                              <button
+                                key={prompt}
+                                type="button"
+                                className="suggestion"
+                                disabled={composerDisabled}
+                                onClick={() => void send(prompt)}
+                              >
+                                {prompt}
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              className="suggestion"
+                              disabled={composerDisabled}
+                              onClick={() => composerRef.current?.focus()}
+                            >
+                              Something else
+                            </button>
+                          </div>
+                        ) : null}
                       </li>
                     );
                   }
                   if (!isUser(entry)) return null;
                   return (
                     <li key={entry.id} className="turn turn-user">
-                      <div className="bubble user">
-                        {entry.content}
-                        <Stamp iso={entry.createdAt} />
-                      </div>
+                      <Stamp iso={entry.createdAt} />
+                      <div className="bubble user">{entry.content}</div>
                     </li>
                   );
                 })}
@@ -1001,12 +1011,6 @@ export function Chat() {
                 void send();
               }}
             >
-              {pending ? (
-                <p className="looking" role="status">
-                  <span className="looking-dot" aria-hidden="true" />
-                  Looking in the guidance…
-                </p>
-              ) : null}
               <label className="sr-only" htmlFor="message">
                 Ask a question about dietary guidance or food safety
               </label>
@@ -1015,7 +1019,7 @@ export function Chat() {
                   ref={composerRef}
                   id="message"
                   name="message"
-                  rows={1}
+                  rows={2}
                   value={draft}
                   disabled={composerDisabled}
                   placeholder="Ask about dietary guidance or food safety..."
@@ -1027,15 +1031,27 @@ export function Chat() {
                     }
                   }}
                 />
-                <button
-                  type="submit"
-                  className="send-button"
-                  aria-label={pending ? "Sending" : "Send message"}
-                  disabled={composerDisabled || draft.trim() === ""}
-                >
-                  <IconSend />
-                </button>
+                <div className="composer-foot">
+                  <p className="composer-status" role="status">
+                    <span className={pending ? "status-dot is-busy" : "status-dot"} aria-hidden="true" />
+                    {pending
+                      ? "Looking in the guidance…"
+                      : `Grounds responses in ${sourceCount} verified public standards`}
+                  </p>
+                  <button
+                    type="submit"
+                    className="send-button"
+                    aria-label={pending ? "Sending" : "Send message"}
+                    disabled={composerDisabled || draft.trim() === ""}
+                  >
+                    <span>Send</span>
+                    <IconSend size={14} />
+                  </button>
+                </div>
               </div>
+              <p className="composer-note">
+                Answers derived solely from official documents. Not personalized medical counsel.
+              </p>
             </form>
           </div>
         </main>
@@ -1046,18 +1062,28 @@ export function Chat() {
         dialogId="sources-dialog"
         labelledBy="sources-title"
         onClose={closeSources}
-        variant={wide ? "dock" : "sheet"}
+        variant="drawer"
+        className="sources-drawer"
       >
-        <div className="dialog-head">
-          <h2 id="sources-title">Official sources</h2>
+        <div className="dialog-head drawer-head">
+          <div>
+            <h2 id="sources-title">Explore Official Sources</h2>
+            <p className="library-intro">Official public guidance used by this assistant.</p>
+            <span className="count-pill">
+              {sourceCount} approved document{sourceCount === 1 ? "" : "s"}
+            </span>
+          </div>
           <button type="button" className="icon-button" aria-label="Close sources" onClick={closeSources}>
             <IconClose />
           </button>
         </div>
-        <p className="library-intro">
-          Approved public documents for dietary guidance and food safety.
+        <div className="drawer-body">
+          <OfficialSources />
+        </div>
+        <p className="drawer-foot">
+          This permanent library contains the verified official public standards referenced
+          across all conversations.
         </p>
-        <OfficialSources />
       </Dialog>
 
       <Dialog
@@ -1090,8 +1116,14 @@ export function Chat() {
         variant="center"
         className="confirm-dialog"
       >
+        <span className="confirm-icon" aria-hidden="true">
+          <IconTrash size={18} />
+        </span>
         <h2 id="delete-title">Delete this conversation?</h2>
-        <p className="confirm-copy">This action cannot be undone.</p>
+        <p className="confirm-copy">
+          This action cannot be undone. The conversation history will be removed from this
+          browser.
+        </p>
         {deleteError ? (
           <p className="confirm-error" role="alert">
             {deleteError}

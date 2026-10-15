@@ -48,11 +48,15 @@ export function SourceItem({
             {url ? <SourceLink url={url} title={title} /> : null}
           </>
         ) : published || inlineSection || url ? (
-          <p className="source-meta">
-            {published ? <span>{published}</span> : null}
-            {inlineSection ? <span>{inlineSection}</span> : null}
+          <>
+            {published || inlineSection ? (
+              <p className="source-meta">
+                {published ? <span>{published}</span> : null}
+                {inlineSection ? <span>{inlineSection}</span> : null}
+              </p>
+            ) : null}
             {url ? <SourceLink url={url} title={title} /> : null}
-          </p>
+          </>
         ) : null}
       </div>
     </div>
@@ -62,7 +66,7 @@ export function SourceItem({
 function SourceLink({ url, title }: { url: string; title: string }) {
   return (
     <a className="source-link" href={url} target="_blank" rel="noopener noreferrer">
-      View source
+      Open official source
       <span aria-hidden="true"> ↗</span>
       <span className="sr-only">
         {title ? ` for ${title}` : ""} (opens in a new tab)
@@ -227,10 +231,7 @@ export function OfficialSources() {
           </span>
           <div className="source-copy">
             <p className="source-title">{document.title}</p>
-            <p className="source-publisher">
-              {document.organization}
-              {Number.isFinite(document.year) ? <span> · {document.year}</span> : null}
-            </p>
+            <p className="source-publisher">{document.organization}</p>
             <a className="source-link" href={document.url} target="_blank" rel="noopener noreferrer">
               Open official source
               <span aria-hidden="true"> ↗</span>
