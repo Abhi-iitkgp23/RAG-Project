@@ -1,6 +1,6 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm run build"
+buildCommand = "cd node_modules/better-sqlite3 && npx --yes node-gyp rebuild && cd ../.. && npm run build"
 
 [deploy]
 startCommand = "sh scripts/release.sh"
