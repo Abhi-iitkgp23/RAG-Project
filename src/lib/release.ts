@@ -25,6 +25,17 @@ export function indexNeedsIngest(indexPath: string, manifestPath: string): boole
 }
 
 /**
+ * `INGEST_ON_RELEASE=0` keeps an index that is already on disk. A missing
+ * file still ingests. Use this when the corpus host blocks the release
+ * fetch and the volume already holds `guidance.db`.
+ */
+export function releaseIngestDisabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.INGEST_ON_RELEASE?.trim() === "0";
+}
+
+/**
  * Run ingest only when the index is missing or stale. The ingest callback
  * owns the temp-file swap. This function does not write `guidance.db`.
  */
@@ -32,7 +43,14 @@ export async function prepareIndex(options: {
   indexPath: string;
   manifestPath: string;
   ingest: () => Promise<void>;
+  env?: NodeJS.ProcessEnv;
 }): Promise<"skipped" | "ingested"> {
+  if (
+    releaseIngestDisabled(options.env) &&
+    existsSync(options.indexPath)
+  ) {
+    return "skipped";
+  }
   if (!indexNeedsIngest(options.indexPath, options.manifestPath)) return "skipped";
   await options.ingest();
   return "ingested";
